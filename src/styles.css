@@ -1,0 +1,16 @@
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body { margin: 0; padding: 0; background: #000; overscroll-behavior: none; }
+#root { width: 100%; }
+::-webkit-scrollbar { width: 0; height: 0; display: none; }
+
+@keyframes lvpop { 0% { transform: scale(1) } 45% { transform: scale(1.06) } 100% { transform: scale(1) } }
+@keyframes fadeUp { 0% { opacity: 0; transform: translateY(10px) } 100% { opacity: 1; transform: translateY(0) } }
+/* Compra de melhoria: anel de luz que expande e some, sobre o ícone */
+@keyframes lumenPulse { 0% { transform: translate(-50%,-50%) scale(0.55); opacity: 0.95 } 100% { transform: translate(-50%,-50%) scale(2.3); opacity: 0 } }
+/* Pop do ícone ao comprar */
+@keyframes lumenPop { 0% { transform: scale(1) } 35% { transform: scale(1.22) } 100% { transform: scale(1) } }
+/* Badge de nível pulsa ao subir */
+@keyframes badgePop { 0% { transform: scale(1) } 30% { transform: scale(1.45) } 100% { transform: scale(1) } }
+
+button { transition: transform .16s ease, box-shadow .25s ease, border-color .25s ease; }
+button:active:not(:disabled) { transform: scale(0.96); }
