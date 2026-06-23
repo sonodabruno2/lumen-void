@@ -40,7 +40,7 @@ class AudioManager {
     return this.ctx
   }
 
-  private out(ctx: AudioContext): AudioNode {
+  private out(_ctx: AudioContext): AudioNode {
     return this.master!
   }
 

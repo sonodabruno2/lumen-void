@@ -2,7 +2,9 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
 
-export default defineConfig({
+export default defineConfig(({ command }) => ({
+  // dev (npm run dev) em '/', produção (build → GitHub Pages) em '/lumen-void/'
+  base: command === 'build' ? '/lumen-void/' : '/',
   plugins: [
     react(),
     VitePWA({
@@ -22,4 +24,4 @@ export default defineConfig({
       },
     }),
   ],
-})
+}))

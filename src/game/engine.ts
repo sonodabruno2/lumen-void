@@ -145,11 +145,12 @@ export class Engine {
     return img
   }
   private loadAssets() {
+    const B = import.meta.env.BASE_URL // respeita o base do Vite ('/lumen-void/' no GitHub Pages, '/' no dev)
     if (!this.heroImg) {
-      this.heroImg = this.loadImg(['/hero.png', '/hero.webp', '/hero.jpg'], () => { this.heroReady = true; this._heroTint = null })
+      this.heroImg = this.loadImg([`${B}hero.png`, `${B}hero.webp`, `${B}hero.jpg`], () => { this.heroReady = true; this._heroTint = null })
     }
     if (!this.bgImg) {
-      this.bgImg = this.loadImg(['/fase1.jpg', '/fase1.png', '/fase1.jpeg', '/fase1.webp'], () => { this.bgReady = true })
+      this.bgImg = this.loadImg([`${B}fase1.jpg`, `${B}fase1.png`, `${B}fase1.jpeg`, `${B}fase1.webp`], () => { this.bgReady = true })
     }
   }
 
