@@ -45,7 +45,7 @@ export class Engine {
 
   screen: Screen = 'title'
   unlocked = 1
-  tokens = 0
+  tokens = 1 // ❖ moeda de desbloqueio de CAMINHO: começa com 1 p/ liberar a Luz; chefes dão +1 p/ as forças
   unlockedForces: ForceKey[] = []
   bossesBeaten: Record<string, boolean> = {}
   run: Run | null = null
@@ -632,7 +632,8 @@ export class Engine {
   goTitle = () => this.setScreen('title')
   goMap = () => { if (this.unlocked === 1) this.startRun(0); else this.setScreen('map') }
   goPoderes = () => this.setScreen('poderes')
-  unlockCore = () => { this.coreUnlocked = true; this.touch() } // libera a Árvore da Luz (ponto de partida)
+  // Libera a Árvore da Luz gastando 1 ❖ (1ª compra do jogo). Guard idempotente + de saldo.
+  unlockCore = () => { if (this.coreUnlocked) return; if (this.tokens <= 0) return; this.tokens--; this.coreUnlocked = true; this.touch() }
   pauseGame = () => this.setScreen('pause')
   resume = () => this.setScreen('game')
   abandon = () => { this.run = null; this.enemies = []; this.shots = []; this.setScreen('title') }
@@ -664,6 +665,7 @@ export class Engine {
     this.touch()
   }
   unlockForce = (k: ForceKey) => {
+    if (!this.coreUnlocked) return // forças só depois de liberar a Luz
     if (this.unlockedForces.length >= 2) return
     if (this.tokens <= 0) return
     if (this.has(k)) return

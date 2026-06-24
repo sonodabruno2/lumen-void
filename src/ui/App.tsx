@@ -101,16 +101,18 @@ function MuteBtn() {
 }
 
 function SpeedControl({ e }: { e: Engine }) {
-  const speeds = [1, 2, 5]
+  // Um único ícone que CICLA as velocidades a cada clique (sem botões separados).
+  const speeds = [1, 2, 5, 10]
+  const cycle = () => { const i = speeds.indexOf(e.speed); e.setSpeed(speeds[(i + 1) % speeds.length]) }
+  const accel = e.speed > 1 // destaca quando acelerado
   return (
-    <div style={{ position: 'absolute', bottom: 16, left: 16, display: 'flex', gap: 6, padding: 4, borderRadius: 12, background: 'rgba(10,15,24,0.5)', border: '1px solid rgba(255,255,255,0.1)', backdropFilter: 'blur(6px)' }}>
-      {speeds.map(sp => {
-        const active = e.speed === sp
-        return (
-          <button key={sp} onClick={() => e.setSpeed(sp)} style={{ width: 36, height: 30, borderRadius: 9, border: 'none', cursor: 'pointer', font: `700 13px ${F}`, background: active ? '#ffe6b0' : 'transparent', color: active ? '#1a1206' : '#aeb7c6' }}>{sp}x</button>
-        )
-      })}
-    </div>
+    <button onClick={cycle} aria-label="Velocidade" title="Velocidade (toque para alternar)"
+      style={{ position: 'absolute', bottom: 16, left: 16, minWidth: 54, height: 38, padding: '0 12px', borderRadius: 11, cursor: 'pointer',
+        border: `1px solid ${accel ? 'transparent' : 'rgba(255,255,255,0.12)'}`, background: accel ? '#ffe6b0' : 'rgba(10,15,24,0.5)',
+        color: accel ? '#1a1206' : '#cfd6e2', font: `700 15px ${F}`, letterSpacing: '0.02em', display: 'flex', alignItems: 'center', justifyContent: 'center',
+        backdropFilter: 'blur(6px)', boxShadow: accel ? '0 0 16px rgba(255,230,176,0.35)' : 'none' }}>
+      {e.speed}×
+    </button>
   )
 }
 
@@ -200,9 +202,8 @@ const isRevealed = (e: Engine, node: { requires?: string }) =>
 
 type TreePt = { id: string; x: number; y: number; meta: NodeMeta }
 
-function buildPts(CX: number, CY: number) {
+function buildPts(CX: number, CY: number, e: Engine) {
   const pts: TreePt[] = []
-  const ZIG = [0.5, 0.70, 0.30, 0.70, 0.30] // zigzag por profundidade (nó de entrada centralizado)
   // Profundidade na cadeia de requisitos (as forças não têm `tier`) — com fallback robusto via requires.
   const depthOf = (nodes: any[]) => {
     const idx = new Map<string, number>(nodes.map((n, i) => [n.id as string, i]))
@@ -214,24 +215,26 @@ function buildPts(CX: number, CY: number) {
     }
     return (n: any) => walk(n)
   }
-  const place = (nodes: any[], color: string, baseAng: number, force: ForceKey | undefined, spread: number) => {
+  const place = (nodes: any[], color: string, baseAng: number, force: ForceKey | undefined, spread: number, lockedForce = false) => {
     const dep = force ? depthOf(nodes) : null
     nodes.forEach(n => {
       const depth = force ? dep!(n) : (n.tier ?? 0) // FORÇAS: profundidade da cadeia; LUZ: tier do dado
       const ring = depth + 1
-      const nx = force ? ZIG[depth % ZIG.length] : (n.nx ?? 0.5)
+      const nx = force ? 0.5 : (n.nx ?? 0.5) // FORÇAS: raio RETO, alinhado ao núcleo; LUZ: nx do dado
       const a = (baseAng + (nx - 0.5) * spread) * Math.PI / 180
-      pts.push({ id: n.id, x: CX + Math.cos(a) * (24 + ring * 96), y: CY + Math.sin(a) * (24 + ring * 96), meta: { node: n, color, force, depth } })
+      const r = lockedForce ? 172 : (24 + ring * 96) // força trancada: card único empurrado p/ fora (cabe sem sobrepor)
+      pts.push({ id: n.id, x: CX + Math.cos(a) * r, y: CY + Math.sin(a) * r, meta: { node: n, color, force, depth } })
     })
   }
   place(BASE.nodes, BASE.color, BR_ANGLE.luz, undefined, 88)
-  for (const k of ORDER) place(PATHS[k].nodes, PATHS[k].color, BR_ANGLE[k], k, 26) // spread 20 -> 26 (leque visível, sem colidir)
+  // Força LIBERADA: árvore inteira. Força TRANCADA: só o nó de entrada (vira card elaborado de liberar, empurrado p/ fora).
+  for (const k of ORDER) { const unlocked = e.has(k); const nodes = unlocked ? PATHS[k].nodes : PATHS[k].nodes.filter((n: any) => !n.requires); place(nodes, PATHS[k].color, BR_ANGLE[k], k, 26, !unlocked) }
   return pts
 }
 
-function RadialTree({ e, selected, onSelect, lastUpgraded }: { e: Engine; selected: string; onSelect: (id: string) => void; lastUpgraded: string }) {
+function RadialTree({ e, selected, onSelect, lastUpgraded, fromGate }: { e: Engine; selected: string; onSelect: (id: string) => void; lastUpgraded: string; fromGate?: boolean }) {
   const CX = 540, CY = 540
-  const pts = buildPts(CX, CY)
+  const pts = buildPts(CX, CY, e)
 
   const [VH, setVH] = useState(480)
   const [pan, setPan] = useState({ x: 0, y: 0 })
@@ -255,10 +258,13 @@ function RadialTree({ e, selected, onSelect, lastUpgraded }: { e: Engine; select
       const w = box.current?.clientWidth || 0, h = box.current?.clientHeight || 0
       if (!w || !h) { raf1 = requestAnimationFrame(run); return } // aguarda o layout do flex/dvh resolver
       setVH(h)
-      const target = lastUpgraded ? pts.find(p => p.id === lastUpgraded) : null
+      // Com selo e NENHUMA força liberada: direciona e trava no CENTRO (núcleo + raios) até liberar 1 força.
+      const lockedCards = e.coreUnlocked && ORDER.some(k => !e.has(k)) // há cards elaborados de força ao redor
+      const frameCenter = lockedCards || (e.tokens > 0 && e.unlockedForces.length === 0)
+      const target = (!frameCenter && lastUpgraded) ? pts.find(p => p.id === lastUpgraded) : null
       const tx = target ? target.x : CX, ty = target ? target.y : CY
-      const unlockPending = e.tokens > 0 && e.unlockedForces.length < 2
-      const startZ = 0.5, endZ = unlockPending ? 0.92 : 1.5 // com selo: enquadra núcleo + raios das forças
+      // Vindo do portão (acordar): entra no tamanho do herói (centrado) e abre suave revelando as skills.
+      const startZ = fromGate ? 1.5 : 0.5, endZ = frameCenter ? 0.8 : 1.5
       // 1º momento: 50% centralizado no núcleo, sem transição (já entra centralizado)
       setAnimating(false)
       setZoom(startZ)
@@ -266,7 +272,7 @@ function RadialTree({ e, selected, onSelect, lastUpgraded }: { e: Engine; select
       setReady(true)
       // 2º momento: habilita a transição e faz o zoom leve até o último item
       raf2 = requestAnimationFrame(() => {
-        setTransMs(800)
+        setTransMs(fromGate ? 1000 : 800)
         setAnimating(true)
         requestAnimationFrame(() => {
           setZoom(endZ)
@@ -342,21 +348,32 @@ function RadialTree({ e, selected, onSelect, lastUpgraded }: { e: Engine; select
     >
       <div style={{ position: 'absolute', left: 0, top: 0, transform: `translate(${pan.x}px,${pan.y}px) scale(${zoom})`, transformOrigin: '0 0', transition: animating ? `transform ${transMs}ms cubic-bezier(0.25,0.8,0.25,1)` : 'none', visibility: ready ? 'visible' : 'hidden' }}>
         <svg width={CX * 2} height={CY * 2} style={{ position: 'absolute', left: 0, top: 0, pointerEvents: 'none', overflow: 'visible' }}>
-          {pts.map(p => { const par = p.meta.node.requires ? posOf(p.meta.node.requires) : { x: CX, y: CY }; if (!par) return null; const on = p.meta.node.requires ? e.lvl(p.meta.node.requires) >= 1 : true; const fk = p.meta.force; const funlocked = fk ? e.has(fk) : false; const lit = on && !(fk && !e.has(fk)); return <line key={'l' + p.id} x1={par.x} y1={par.y} x2={p.x} y2={p.y} stroke={lit ? withA(p.meta.color, funlocked ? 0.7 : 0.45) : 'rgba(255,255,255,0.07)'} strokeWidth={funlocked ? 4 : 2} style={funlocked ? { filter: `drop-shadow(0 0 4px ${withA(p.meta.color, 0.6)})` } : undefined} /> })}
+          {pts.map(p => { const par = p.meta.node.requires ? posOf(p.meta.node.requires) : { x: CX, y: CY }; if (!par) return null; const on = p.meta.node.requires ? e.lvl(p.meta.node.requires) >= 1 : true; const fk = p.meta.force; const funlocked = fk ? e.has(fk) : false; const lit = on && !(fk && !e.has(fk)); return <line key={'l' + p.id} x1={par.x} y1={par.y} x2={p.x} y2={p.y} stroke={lit ? withA(p.meta.color, funlocked ? 0.7 : 0.45) : (fk ? withA(p.meta.color, 0.24) : 'rgba(255,255,255,0.07)')} strokeWidth={funlocked ? 4 : (fk ? 2.5 : 2)} style={funlocked ? { filter: `drop-shadow(0 0 4px ${withA(p.meta.color, 0.6)})` } : undefined} /> })}
         </svg>
         {/* núcleo central */}
-        <div style={{ position: 'absolute', left: CX, top: CY, transform: 'translate(-50%,-50%)', width: 46, height: 46, borderRadius: '50%', background: 'radial-gradient(circle at 50% 40%, #fff6da, rgba(255,230,176,0.15))', boxShadow: '0 0 26px rgba(255,230,176,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', font: `700 9px ${F}`, color: '#5a4a18' }}>NÚCLEO</div>
+        <div style={{ position: 'absolute', left: CX, top: CY, transform: 'translate(-50%,-50%)', width: 58, height: 58, display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'none' }}>
+          {/* aura externa que respira (pulsa) */}
+          <div style={{ position: 'absolute', left: '50%', top: '50%', width: 152, height: 152, transform: 'translate(-50%,-50%)', borderRadius: '50%', background: 'radial-gradient(circle, rgba(255,236,190,0.34), rgba(255,230,176,0.06) 50%, rgba(255,230,176,0) 72%)', animation: 'lumenBreath 3.2s ease-in-out infinite' }} />
+          {/* disco de luz quente atrás do herói */}
+          <div style={{ position: 'absolute', left: '50%', top: '50%', width: 70, height: 70, transform: 'translate(-50%,-50%)', borderRadius: '50%', background: 'radial-gradient(circle, rgba(255,249,228,0.85), rgba(255,232,182,0.28) 52%, rgba(255,230,176,0) 76%)' }} />
+          {/* herói pequeno ao centro, com MUITO brilho como contorno (várias drop-shadows) */}
+          <img src={`${import.meta.env.BASE_URL}hero.png`} alt="" draggable={false}
+            style={{ position: 'relative', width: 26, height: 'auto', filter: 'drop-shadow(0 0 2px #fffef8) drop-shadow(0 0 6px rgba(255,240,200,0.95)) drop-shadow(0 0 14px rgba(255,224,160,0.85)) drop-shadow(0 0 26px rgba(255,208,130,0.55))', animation: 'lvpop 2.8s ease-in-out infinite' }} />
+        </div>
         {/* rótulo do nome de cada força, na entrada do raio (entre o núcleo e o 1º nó) */}
         {ORDER.map(k => {
           const a = BR_ANGLE[k] * Math.PI / 180
           const lx = CX + Math.cos(a) * 78, ly = CY + Math.sin(a) * 78
           const unlocked = e.has(k)
+          const col = PATHS[k].color // sempre a cor do caminho, mesmo trancada
           return (
-            <div key={'flbl' + k} style={{ position: 'absolute', left: lx, top: ly, transform: 'translate(-50%,-50%)', font: `700 9px ${F}`, letterSpacing: '0.16em', whiteSpace: 'nowrap', pointerEvents: 'none', color: unlocked ? PATHS[k].color : '#7f8aa0', textShadow: unlocked ? `0 0 8px ${withA(PATHS[k].color, 0.6)}` : 'none', opacity: unlocked ? 1 : 0.7 }}>
+            <div key={'flbl' + k} style={{ position: 'absolute', left: lx, top: ly, transform: 'translate(-50%,-50%)', font: `700 9px ${F}`, letterSpacing: '0.16em', whiteSpace: 'nowrap', pointerEvents: 'none', zIndex: 2, color: col, opacity: unlocked ? 1 : 0.92, textShadow: `0 0 3px rgba(6,8,12,0.95), 0 0 8px ${withA(col, unlocked ? 0.75 : 0.45)}` }}>
               {PATHS[k].name.toUpperCase()}{unlocked ? '' : ' ❖'}
             </div>
           )
         })}
+        {/* título do caminho da Luz (mesmo estilo dos títulos das forças) */}
+        <div style={{ position: 'absolute', left: CX, top: CY - 78, transform: 'translate(-50%,-50%)', font: `700 9px ${F}`, letterSpacing: '0.16em', whiteSpace: 'nowrap', pointerEvents: 'none', zIndex: 2, color: BASE.color, textShadow: `0 0 3px rgba(6,8,12,0.95), 0 0 8px ${withA(BASE.color, 0.75)}` }}>LUZ</div>
         {pts.map(p => (
           <NodeCard key={p.id} e={e} p={p} st={stateOf(p.meta)} selected={selected === p.id}
             onSelect={() => { if (!drag.current?.moved) onSelect(p.id) }} />
@@ -415,6 +432,8 @@ function NodeCard({ e, p, st, selected, onSelect }: { e: Engine; p: TreePt; st: 
   const canBuy = buyable && canAfford
   const isEntry = !node.requires // raiz da cadeia (nó de entrada da força)
   const invite = st === 'force' && canUnlock && isEntry // entrada de força a liberar (você tem selo ❖)
+  const lockedPath = st === 'force' && isEntry // força trancada → card elaborado "liberar caminho" (sempre expandido)
+  const expand = selected || lockedPath
 
   // pulso visual quando o nível sobe (retorno da compra)
   const [pulse, setPulse] = useState(false)
@@ -431,16 +450,16 @@ function NodeCard({ e, p, st, selected, onSelect }: { e: Engine; p: TreePt; st: 
   else if (st === 'locked') { btnLabel = '🔒 Bloqueado'; btnBg = 'rgba(255,255,255,0.05)'; btnColor = '#6f7a8c' }
   else { btnLabel = `${c} ${force ? '◈' : '✦'}`; btnBg = canBuy ? col : 'rgba(255,255,255,0.07)'; btnColor = canBuy ? '#06080c' : '#8a95a6' }
 
-  const ringSize = 50, W = selected ? 116 : 58
+  const ringSize = 50, W = expand ? 116 : 58
 
   return (
     <div onPointerDown={ev => ev.stopPropagation()} onClick={onSelect}
-      style={{ position: 'absolute', left: p.x, top: p.y, transform: 'translate(-50%,-50%)', width: W, padding: selected ? '11px 9px 9px' : '7px 6px', borderRadius: 14, cursor: 'pointer', textAlign: 'center',
+      style={{ position: 'absolute', left: p.x, top: p.y, transform: 'translate(-50%,-50%)', width: W, padding: expand ? '11px 9px 9px' : '7px 6px', borderRadius: 14, cursor: 'pointer', textAlign: 'center',
         background: dim ? 'rgba(10,12,18,0.55)' : filled ? `linear-gradient(160deg,${withA(col, 0.22)},rgba(10,12,18,0.6))` : 'rgba(12,15,22,0.55)',
         backdropFilter: 'blur(5px)', WebkitBackdropFilter: 'blur(5px)',
-        border: `${selected || invite ? 2 : 1}px solid ${selected ? col : withA(col, dim && !invite ? 0.16 : 0.42)}`,
-        boxShadow: invite ? `0 0 20px ${withA(col, 0.85)},0 0 8px ${withA(col, 0.5)}` : pulse ? `0 0 26px ${withA(col, 0.95)},0 0 10px ${withA(col, 0.6)}` : selected ? `0 0 18px ${withA(col, 0.6)}` : st === 'avail' ? `0 0 8px ${withA(col, 0.28)}` : 'none',
-        opacity: invite ? 1 : (dim ? 0.66 : 1), animation: invite ? 'lvpop 2.2s ease-in-out infinite' : undefined, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: selected ? 5 : 3, transition: 'width .18s,box-shadow .25s,border-color .2s,background .2s', zIndex: selected ? 3 : 1 }}>
+        border: `${selected || invite || lockedPath ? 2 : 1}px solid ${selected ? col : withA(col, dim && !invite && !lockedPath ? 0.16 : 0.42)}`,
+        boxShadow: invite ? `0 0 20px ${withA(col, 0.85)},0 0 8px ${withA(col, 0.5)}` : pulse ? `0 0 26px ${withA(col, 0.95)},0 0 10px ${withA(col, 0.6)}` : selected ? `0 0 18px ${withA(col, 0.6)}` : lockedPath ? `0 0 14px ${withA(col, 0.5)}` : st === 'avail' ? `0 0 8px ${withA(col, 0.28)}` : 'none',
+        opacity: invite ? 1 : (lockedPath ? 1 : (dim ? 0.66 : 1)), animation: invite ? 'lvpop 2.2s ease-in-out infinite' : undefined, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: expand ? 5 : 3, transition: 'width .18s,box-shadow .25s,border-color .2s,background .2s', zIndex: lockedPath ? 2 : (selected ? 3 : 1) }}>
 
       {/* badge de nível — metade fora do card, no canto */}
       {L > 0 && (
@@ -462,14 +481,14 @@ function NodeCard({ e, p, st, selected, onSelect }: { e: Engine; p: TreePt; st: 
       </div>
 
       {/* rótulo curto */}
-      <div style={{ font: `700 ${selected ? 10 : 8.5}px/1.05 ${F}`, letterSpacing: '0.02em', color: dim ? '#8a95a6' : '#e8edf4' }}>{mystery ? '???' : shortOf(node.id, node.name)}</div>
+      <div style={{ font: `700 ${expand ? 10 : 8.5}px/1.05 ${F}`, letterSpacing: '0.02em', color: lockedPath ? col : (dim ? '#8a95a6' : '#e8edf4') }}>{mystery ? '???' : lockedPath ? PATHS[force!].name.toUpperCase() : shortOf(node.id, node.name)}</div>
 
       {/* detalhes claros — só quando selecionado */}
-      {selected && (mystery ? (
+      {expand && (mystery ? (
         <div style={{ font: `400 8.5px/1.3 ${F}`, color: '#8a93a6' }}>Mistério — libere a skill anterior para revelar.</div>
       ) : (
         <>
-          <div style={{ font: `400 8.5px/1.3 ${F}`, color: '#9aa9bd' }}>{node.desc}{force ? ` · ${PATHS[force].name}` : ''}</div>
+          <div style={{ font: `400 8.5px/1.3 ${F}`, color: '#9aa9bd' }}>{lockedPath ? 'Desperte esta força da natureza.' : node.desc}{!lockedPath && force ? ` · ${PATHS[force].name}` : ''}</div>
           <button onPointerDown={ev => ev.stopPropagation()}
             onClick={ev => { ev.stopPropagation(); if (st === 'force') { if (canUnlock && force) e.unlockForce(force) } else if (canBuy) { force ? e.buyForceNode(force, node.baseCost, node.id) : e.buyNode(node.baseCost, node.id) } }}
             style={{ width: '100%', marginTop: 1, padding: '6px 2px', borderRadius: 9, border: 'none', font: `800 10px ${F}`, cursor: (canBuy || canUnlock) ? 'pointer' : 'default', background: btnBg, color: btnColor, opacity: (buyable && !canAfford) ? 0.5 : 1 }}>
@@ -483,6 +502,7 @@ function NodeCard({ e, p, st, selected, onSelect }: { e: Engine; p: TreePt; st: 
 
 function Shop({ e }: { e: Engine }) {
   const [sel, setSel] = useState('') // ao abrir a loja, nada selecionado
+  const [fromGate, setFromGate] = useState(false) // acabou de acordar o núcleo → transição sutil p/ a árvore
 
   // Rolagem das fases: começa mostrando a MAIS RECENTE (à direita); as antigas ficam à esquerda.
   const phaseScroll = useRef<HTMLDivElement>(null)
@@ -494,10 +514,15 @@ function Shop({ e }: { e: Engine }) {
       <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 26, padding: '40px 28px', background: 'rgba(6,8,12,0.88)', backdropFilter: 'blur(7px)' }}>
         <div style={{ position: 'absolute', top: 0, left: 0, right: 0, padding: '56px 30px 0', textAlign: 'center', pointerEvents: 'none' }}>
           <div style={{ font: `500 10px ${F}`, letterSpacing: '0.34em', color: '#7f8aa0', marginBottom: 12 }}>O NÚCLEO</div>
-          <div style={{ font: `300 21px/1.45 ${F}`, color: '#dfe5ee', letterSpacing: '0.01em', textShadow: '0 0 24px rgba(220,228,238,0.18)' }}>Trabalhe suas melhorias.<br />Cada passo fortalece a luz — comece liberando o núcleo.</div>
+          <div style={{ font: `300 21px/1.45 ${F}`, color: '#dfe5ee', letterSpacing: '0.01em', textShadow: '0 0 24px rgba(220,228,238,0.18)' }}>Acorde o núcleo e desperte a Luz —<br />o único caminho para começar. Custa 1 ❖.</div>
         </div>
-        <div style={{ width: 104, height: 104, borderRadius: '50%', background: 'radial-gradient(circle at 50% 40%, #fff6da, rgba(255,230,176,0.12))', boxShadow: '0 0 64px rgba(255,230,176,0.5), 0 0 22px rgba(255,230,176,0.75)', display: 'flex', alignItems: 'center', justifyContent: 'center', font: `700 12px ${F}`, color: '#5a4a18', letterSpacing: '0.1em', animation: 'lvpop 2.6s ease-in-out infinite' }}>NÚCLEO</div>
-        <button onClick={e.unlockCore} style={{ width: '100%', maxWidth: 320, padding: 16, borderRadius: 14, border: 'none', background: '#ffe6b0', color: '#1a1206', font: `700 15px ${F}`, cursor: 'pointer', boxShadow: '0 0 34px rgba(255,230,176,0.4)' }}>Liberar melhorias do núcleo</button>
+        <div style={{ position: 'relative', width: 120, height: 120, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div style={{ position: 'absolute', left: '50%', top: '50%', width: 200, height: 200, transform: 'translate(-50%,-50%)', borderRadius: '50%', background: 'radial-gradient(circle, rgba(255,236,190,0.3), rgba(255,230,176,0.05) 50%, rgba(255,230,176,0) 72%)', animation: 'lumenBreath 3.2s ease-in-out infinite' }} />
+          <div style={{ position: 'absolute', left: '50%', top: '50%', width: 96, height: 96, transform: 'translate(-50%,-50%)', borderRadius: '50%', background: 'radial-gradient(circle, rgba(255,249,228,0.8), rgba(255,232,182,0.25) 52%, rgba(255,230,176,0) 76%)' }} />
+          <img src={`${import.meta.env.BASE_URL}hero.png`} alt="" draggable={false} style={{ position: 'relative', width: 42, height: 'auto', filter: 'drop-shadow(0 0 3px #fffef8) drop-shadow(0 0 8px rgba(255,240,200,0.95)) drop-shadow(0 0 18px rgba(255,224,160,0.85)) drop-shadow(0 0 32px rgba(255,208,130,0.55))', animation: 'lvpop 2.8s ease-in-out infinite' }} />
+        </div>
+        <div style={{ font: `600 13px ${F}`, color: '#d9b8ff', marginTop: -8 }}>{e.tokens} ❖ disponível</div>
+        <button onClick={() => { e.unlockCore(); setFromGate(true) }} disabled={e.tokens < 1} style={{ width: '100%', maxWidth: 320, padding: 16, borderRadius: 14, border: 'none', background: e.tokens >= 1 ? '#ffe6b0' : 'rgba(255,255,255,0.07)', color: e.tokens >= 1 ? '#1a1206' : '#8a95a6', font: `700 15px ${F}`, cursor: e.tokens >= 1 ? 'pointer' : 'default', boxShadow: e.tokens >= 1 ? '0 0 34px rgba(255,230,176,0.4)' : 'none' }}>Acordar o núcleo · 1 ❖</button>
         <button onClick={e.goTitle} style={{ position: 'absolute', bottom: 22, left: 20, right: 20, padding: 12, borderRadius: 13, border: '1px solid rgba(255,255,255,0.12)', background: 'transparent', color: '#8a95a6', font: `500 13px ${F}`, cursor: 'pointer' }}>← Início</button>
       </div>
     )
@@ -509,7 +534,7 @@ function Shop({ e }: { e: Engine }) {
     <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', padding: '0 0 16px', background: 'rgba(6,8,12,0.86)', backdropFilter: 'blur(7px)' }}>
       {/* Árvore — ocupa toda a área e passa ATRÁS do cabeçalho translúcido */}
       <div style={{ flex: 1, minHeight: 0, padding: '8px 10px 6px' }}>
-        <RadialTree e={e} selected={sel} onSelect={setSel} lastUpgraded={e.lastUpgraded} />
+        <RadialTree e={e} selected={sel} onSelect={setSel} lastUpgraded={e.lastUpgraded} fromGate={fromGate} />
       </div>
 
       {/* Aviso de progressão: ganhou selo ❖ → hora de despertar uma força (pulsa; some ao gastar ou ao ter 2 forças) */}
