@@ -56,6 +56,7 @@ export class Engine {
   coins = 0
   forceCoins: Record<ForceKey, number> = { storm: 0, volcano: 0, forest: 0, frost: 0, terra: 0 } // moeda própria de cada força
   perm: Record<string, number> = {}
+  coreUnlocked = false // 1ª visita às Melhorias: só o núcleo + CTA; após liberar, revela a Árvore da Luz
   speed = 1
   deathLine = '' // frase exibida no topo da tela de morte
 
@@ -628,6 +629,7 @@ export class Engine {
   goTitle = () => this.setScreen('title')
   goMap = () => { if (this.unlocked === 1) this.startRun(0); else this.setScreen('map') }
   goPoderes = () => this.setScreen('poderes')
+  unlockCore = () => { this.coreUnlocked = true; this.touch() } // libera a Árvore da Luz (ponto de partida)
   pauseGame = () => this.setScreen('pause')
   resume = () => this.setScreen('game')
   abandon = () => { this.run = null; this.enemies = []; this.shots = []; this.setScreen('title') }
@@ -735,7 +737,8 @@ export class Engine {
     ctx.restore()
     // Iluminação dinâmica (tela cheia, FORA do parallax): escurece na morte, clareia a cada onda superada
     if (this.bgReady && this.bgImg) {
-      const tintA = Math.max(0, 0.2 + this._deathProg * 0.55 - lift * 0.16)
+      // Onda 1 quase no escuro (void da fase); a cada onda vencida (lift) a luz da fase toma conta.
+      const tintA = Math.max(0, (this.run ? 0.66 : 0.28) - lift * 0.68 + this._deathProg * 0.4)
       if (tintA > 0.001) { ctx.fillStyle = this.withA(pal.void, tintA); ctx.fillRect(-20, -20, W + 40, H + 40) }
     }
     // flutuação do personagem (sobe/desce, como se estivesse vivo) — usada no sprite e no balão
@@ -746,9 +749,11 @@ export class Engine {
     ctx.scale(zp * (1 + this._camAngle), zp)
     ctx.translate(-cx, -cy)
     if (sk) ctx.translate(sx, sy)
-    const aliveR = Math.max(W, H) * (0.3 + prog * 0.34)
+    // Banho de luz da fase, irradiando do centro — começa quase nulo (onda 1 escura) e cresce/clareia
+    // forte a cada onda vencida (lift): a luz "vence o vazio" e toma conta da tela no tom da fase.
+    const aliveR = Math.max(W, H) * (0.26 + lift * 0.62)
     let g = ctx.createRadialGradient(cx, cy, 8, cx, cy, aliveR)
-    g.addColorStop(0, this.withA(pal.glow, 0.5 + prog * 0.32)); g.addColorStop(0.5, this.withA(pal.glow, 0.12 + prog * 0.12)); g.addColorStop(1, this.withA(pal.glow, 0))
+    g.addColorStop(0, this.withA(pal.glow, 0.1 + lift * 0.72)); g.addColorStop(0.5, this.withA(pal.glow, 0.04 + lift * 0.26)); g.addColorStop(1, this.withA(pal.glow, 0))
     ctx.fillStyle = g; ctx.fillRect(-20, -20, W + 40, H + 40)
     if (parts) { for (const mo of this.motes) { const d = Math.hypot(mo.x - cx, mo.y - cy); const fade = Math.max(0, 1 - d / this.maxMote); const tw = 0.5 + 0.5 * Math.sin(this.t * 2 + mo.ph); ctx.globalAlpha = fade * tw * (0.35 + prog * 0.55); ctx.fillStyle = pal.accent; ctx.beginPath(); ctx.arc(mo.x, mo.y, mo.sz, 0, 7); ctx.fill() } ctx.globalAlpha = 1 }
     for (const z of this.zones) { const a = Math.min(1, z.dur) * 0.4; const zg = ctx.createRadialGradient(z.x, z.y, 2, z.x, z.y, z.r); zg.addColorStop(0, `rgba(255,140,60,${a})`); zg.addColorStop(1, 'rgba(255,90,30,0)'); ctx.fillStyle = zg; ctx.beginPath(); ctx.arc(z.x, z.y, z.r, 0, 7); ctx.fill() }
@@ -873,14 +878,14 @@ export class Engine {
       // O pilar NÃO encolhe na morte (sem dp0): só o personagem se esvai; o pilar permanece intacto.
       const pTop = cy + 24, pBot = cy + H * 0.42, pw = 24
       const pg = ctx.createLinearGradient(0, pTop, 0, pBot)
-      pg.addColorStop(0, this.run ? this.withA(pal.accent, 0.55) : 'rgba(200,210,225,0.38)')
-      pg.addColorStop(0.45, this.run ? this.withA(pal.accent, 0.20) : 'rgba(200,210,225,0.11)')
+      pg.addColorStop(0, this.run ? this.withA(pal.accent, 0.4 + lift * 0.4) : 'rgba(200,210,225,0.38)')
+      pg.addColorStop(0.45, this.run ? this.withA(pal.accent, 0.14 + lift * 0.18) : 'rgba(200,210,225,0.11)')
       pg.addColorStop(1, 'rgba(0,0,0,0)')
       ctx.fillStyle = pg; this.roundRect(ctx, cx - pw / 2, pTop, pw, pBot - pTop, pw / 2); ctx.fill()
       // brilho de contato no topo do pilar (elipse achatada) — a luz do orbe "pousa" sem tocar
       if (glow) {
         const ag = ctx.createRadialGradient(cx, pTop, 1, cx, pTop, pw * 0.9)
-        ag.addColorStop(0, this.withA(pal.glow, 0.18)); ag.addColorStop(1, 'rgba(255,255,255,0)')
+        ag.addColorStop(0, this.withA(pal.glow, 0.14 + lift * 0.28)); ag.addColorStop(1, 'rgba(255,255,255,0)')
         ctx.save(); ctx.translate(cx, pTop); ctx.scale(1, 0.32); ctx.fillStyle = ag
         ctx.beginPath(); ctx.arc(0, 0, pw * 0.9, 0, 7); ctx.fill(); ctx.restore()
       }
@@ -891,22 +896,25 @@ export class Engine {
       const ax = cx - drawW / 2, ay = hcy - drawH * orbY
       // efeito de luz atrás do personagem (halo radial pulsante)
       if (glow) {
-        const hg = ctx.createRadialGradient(cx, hcy, 2, cx, hcy, 96 * HERO_SCALE * bp)
-        hg.addColorStop(0, this.withA(this.unlockedForces.length ? PATHS[this.unlockedForces[0]].color : '#ffe6b0', 0.5 * (1 - dp * 0.5)))
-        hg.addColorStop(0.5, this.withA(acc, 0.16 * (1 - dp * 0.4)))
+        // Halo/aura — a "luz" que o personagem emana, no TOM DA FASE; cresce a cada onda vencida (lift).
+        const auraCol = this.unlockedForces.length ? PATHS[this.unlockedForces[0]].color : pal.accent
+        const haloR = (46 + lift * 30) * bp
+        const hg = ctx.createRadialGradient(cx, hcy, 2, cx, hcy, haloR)
+        hg.addColorStop(0, this.withA(auraCol, (0.4 + lift * 0.5) * (1 - dp * 0.5)))
+        hg.addColorStop(0.5, this.withA(pal.glow, (0.14 + lift * 0.2) * (1 - dp * 0.4)))
         hg.addColorStop(1, 'rgba(255,255,255,0)')
-        ctx.fillStyle = hg; ctx.beginPath(); ctx.arc(cx, hcy, 96 * HERO_SCALE * bp, 0, 7); ctx.fill()
+        ctx.fillStyle = hg; ctx.beginPath(); ctx.arc(cx, hcy, haloR, 0, 7); ctx.fill()
       }
       // sprite com brilho (shadow), enfraquece ao morrer
       ctx.save(); ctx.globalAlpha = 1 - dp * 0.6
-      if (glow) { ctx.shadowColor = acc; ctx.shadowBlur = 24 * HERO_SCALE * (1 - dp * 0.6) }
+      if (glow) { ctx.shadowColor = acc; ctx.shadowBlur = (9 + lift * 13) * (1 - dp * 0.6) }
       ctx.drawImage(this.heroImg, ax, ay, drawW, drawH)
       ctx.restore()
       // ambientação: tinge o sprite com a cor do bioma (soft-light) p/ integrar à cena
       const tinted = this.getTintedHero(pal.accent)
-      if (tinted) { ctx.save(); ctx.globalCompositeOperation = 'soft-light'; ctx.globalAlpha = (0.4 + lift * 0.16) * (1 - dp * 0.5); ctx.drawImage(tinted, ax, ay, drawW, drawH); ctx.restore() }
+      if (tinted) { ctx.save(); ctx.globalCompositeOperation = 'soft-light'; ctx.globalAlpha = (0.35 + lift * 0.3) * (1 - dp * 0.5); ctx.drawImage(tinted, ax, ay, drawW, drawH); ctx.restore() }
       // brilho interno aditivo no orbe (sensação de vivo)
-      if (glow) { ctx.save(); ctx.globalCompositeOperation = 'lighter'; const og = ctx.createRadialGradient(cx, hcy, 1, cx, hcy, 28 * HERO_SCALE * bp); og.addColorStop(0, this.withA('#fff7e0', 0.5 * (1 - dp * 0.6))); og.addColorStop(1, 'rgba(255,255,255,0)'); ctx.fillStyle = og; ctx.beginPath(); ctx.arc(cx, hcy, 28 * HERO_SCALE * bp, 0, 7); ctx.fill(); ctx.restore() }
+      if (glow) { ctx.save(); ctx.globalCompositeOperation = 'lighter'; const ogR = (15 + lift * 10) * bp; const og = ctx.createRadialGradient(cx, hcy, 1, cx, hcy, ogR); og.addColorStop(0, this.withA('#fff7e0', (0.55 + lift * 0.22) * (1 - dp * 0.6))); og.addColorStop(1, 'rgba(255,255,255,0)'); ctx.fillStyle = og; ctx.beginPath(); ctx.arc(cx, hcy, ogR, 0, 7); ctx.fill(); ctx.restore() }
     } else {
       // Fallback procedural (enquanto hero.png não existe): pilar + ser de luz
       const pTop = cy + 16, pBot = cy + H * 0.42 * (1 - dp0 * 0.82), pw = 34 * (1 - dp0 * 0.45)
