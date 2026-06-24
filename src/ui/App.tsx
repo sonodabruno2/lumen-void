@@ -9,6 +9,16 @@ const F = "'Space Grotesk',sans-serif"
 
 const OPTS: EngineOpts = { difficulty: 'Equilibrado', particles: true, glow: true }
 
+// --- Portão de acesso (cortina client-side) ---
+// ACCESS_OPEN: trava-mestra controlada AQUI no código. true = jogo abre SEM senha; false = exige o código.
+const ACCESS_OPEN = false
+// SHA-256 (hex) do código de acesso (6 dígitos). VAZIO = portão desligado. (texto puro nunca fica no fonte)
+const ACCESS_HASH = '8dc32c96aa1700abc885cb31fa544c186ae132023739d3aa0cdae116448ed6cf'
+async function sha256Hex(s: string): Promise<string> {
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s))
+  return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, '0')).join('')
+}
+
 export default function App() {
   const [, force] = useReducer((n: number) => n + 1, 0)
   const engineRef = useRef<Engine | null>(null)
@@ -18,21 +28,28 @@ export default function App() {
   useEffect(() => { e.mount(); return () => e.unmount() }, [e])
 
   const s = e.screen
+  // Portão de acesso: se há um código configurado (ACCESS_HASH), exige desbloqueio (lembrado por aparelho).
+  const [access, setAccess] = useState(() => {
+    if (ACCESS_OPEN || !ACCESS_HASH) return true // override no código, ou sem código → aberto
+    try { return localStorage.getItem('lumen_access') === '1' } catch { return false }
+  })
 
   return (
     <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', width: '100%', minHeight: '100dvh', background: '#000', fontFamily: F }}>
       <div style={{ position: 'relative', width: 'min(100vw,460px)', height: '100dvh', maxHeight: 1000, overflow: 'hidden', background: '#06080c', color: '#e8edf4' }}>
         <canvas ref={e.setCanvas} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', display: 'block' }} />
 
-        {s === 'title' && <Title e={e} />}
-        {s === 'map' && <MapScreen e={e} />}
-        {s === 'game' && <PauseBtn e={e} />}
-        {s === 'game' && <MuteBtn />}
-        {s === 'game' && <SpeedControl e={e} />}
-        {s === 'pause' && <Pause e={e} />}
-        {(s === 'upgrade' || s === 'poderes') && <Shop e={e} />}
-        {s === 'victory' && <End e={e} />}
-        {s === 'defeat' && <DeathScreen e={e} />}
+        {access ? (<>
+          {s === 'title' && <Title e={e} />}
+          {s === 'map' && <MapScreen e={e} />}
+          {s === 'game' && <PauseBtn e={e} />}
+          {s === 'game' && <MuteBtn />}
+          {s === 'game' && <SpeedControl e={e} />}
+          {s === 'pause' && <Pause e={e} />}
+          {(s === 'upgrade' || s === 'poderes') && <Shop e={e} />}
+          {s === 'victory' && <End e={e} />}
+          {s === 'defeat' && <DeathScreen e={e} />}
+        </>) : <AccessGate onUnlock={() => setAccess(true)} />}
       </div>
     </div>
   )
@@ -43,6 +60,28 @@ const primaryBtn: React.CSSProperties = {
   padding: 16, borderRadius: 14, border: 'none', background: '#ffe6b0',
   color: '#1a1206', font: `600 16px ${F}`, letterSpacing: '0.02em',
   cursor: 'pointer', boxShadow: '0 0 30px rgba(255,230,176,0.25)',
+}
+
+// Portão minimalista: SÓ um campo de 6 dígitos. Digita e Enter; código certo (hash) libera e lembra no aparelho.
+function AccessGate({ onUnlock }: { onUnlock: () => void }) {
+  const [val, setVal] = useState('')
+  const [err, setErr] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const submit = async () => {
+    if (busy || val.length < 6) return
+    setBusy(true)
+    const ok = (await sha256Hex(val)) === ACCESS_HASH
+    if (ok) { try { localStorage.setItem('lumen_access', '1') } catch { /* ignore */ } ; onUnlock() }
+    else { setErr(true); setVal(''); setBusy(false); setTimeout(() => setErr(false), 450) }
+  }
+  return (
+    <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#06080c' }}>
+      <input type="password" value={val} autoFocus inputMode="numeric" pattern="[0-9]*" maxLength={6}
+        onChange={ev => { setVal(ev.target.value.replace(/\D/g, '').slice(0, 6)); setErr(false) }}
+        onKeyDown={ev => { if (ev.key === 'Enter') submit() }}
+        style={{ width: 176, padding: '14px 0', borderRadius: 12, border: `1px solid ${err ? '#c96' : 'rgba(255,255,255,0.14)'}`, background: 'rgba(255,255,255,0.04)', color: '#e8edf4', font: `600 26px ${F}`, textAlign: 'center', outline: 'none', letterSpacing: '0.55em', caretColor: '#ffe6b0' }} />
+    </div>
+  )
 }
 
 function PauseBtn({ e }: { e: Engine }) {

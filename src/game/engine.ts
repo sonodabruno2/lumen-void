@@ -321,14 +321,17 @@ export class Engine {
       // direção do empurrão da moeda: o hit fatal, ou (padrão) para fora do núcleo
       let dx = hx, dy = hy
       if (dx === undefined || dy === undefined) { const ox = e.x - this.cx, oy = e.y - this.cy, om = Math.hypot(ox, oy) || 1; dx = ox / om; dy = oy / om }
+      // Recompensa escala com a robustez do inimigo (e.coin: comum 1, tanque 2, chefe 15) × dificuldade da fase
+      const diffMul = 1 + 0.5 * (MAPS[this.run.mapIdx].diff - 1) // dif 1..7 → 1.0..4.0
       if (e.force) {
-        // inimigo de força → dropa moeda daquela força
-        this.forceCoins[e.force] += 1
-        this.fx.push({ type: 'coin', x: e.x, y: e.y, sx: e.x, sy: e.y, dx, dy, life: 1.15, max: 1.15, text: '+1 ◈', color: PATHS[e.force].color })
+        // inimigo de força → dropa a moeda daquela força (sem b_luz, que é exclusivo da Luz)
+        const amt = Math.max(1, Math.round(e.coin * diffMul))
+        this.forceCoins[e.force] += amt
+        this.fx.push({ type: 'coin', x: e.x, y: e.y, sx: e.x, sy: e.y, dx, dy, life: 1.15, max: 1.15, text: `+${amt} ◈`, color: PATHS[e.force].color })
       } else {
-        const coinAmt = 1 + this.lvl('b_luz')
-        this.coins += coinAmt
-        this.fx.push({ type: 'coin', x: e.x, y: e.y, sx: e.x, sy: e.y, dx, dy, life: 1.15, max: 1.15, text: `+${coinAmt} ✦` })
+        const amt = Math.max(1, Math.round(e.coin * diffMul * (1 + this.lvl('b_luz'))))
+        this.coins += amt
+        this.fx.push({ type: 'coin', x: e.x, y: e.y, sx: e.x, sy: e.y, dx, dy, life: 1.15, max: 1.15, text: `+${amt} ✦` })
       }
       if (e.boss) this._shake = 0.5
       // Mecânicas de abate por LUZ (não re-disparam em cadeia)
@@ -469,8 +472,8 @@ export class Engine {
     if (!this._waveResolved && this.toSpawn.length === 0 && this.enemies.length === 0) {
       this._waveResolved = true
       const m = MAPS[run.mapIdx]
-      // Bônus por superar a onda: 5× o valor da moeda por abate atual
-      const waveBonus = 5 * (1 + this.lvl('b_luz'))
+      // Bônus por superar a onda: ~5 abates ao valor da fase atual (escala com a dificuldade)
+      const waveBonus = Math.round(5 * (1 + 0.5 * (m.diff - 1)) * (1 + this.lvl('b_luz')))
       this.coins += waveBonus
       audio.play('coin')
       // Recompensa de onda anima junto ao total de moedas no topo
@@ -962,19 +965,41 @@ export class Engine {
     ctx.fillStyle = col; this.roundRect(ctx, bx, by, Math.max(3, bw * ratio), bh, 4); ctx.fill()
     ctx.fillStyle = '#aeb7c6'; ctx.font = "500 10px 'Space Grotesk',sans-serif"; ctx.textAlign = 'center'
     ctx.fillText('INTEGRIDADE  ' + Math.ceil(run.hp) + ' / ' + mx, W / 2, by + 22)
-    const chips = [{ c: '#ffe6b0', letter: '' }, ...this.unlockedForces.map(k => ({ c: PATHS[k].color, letter: PATHS[k].name[0] }))]
-    for (let i = 0; i < chips.length; i++) { const chx = 22 + i * 26, chy = 26; ctx.fillStyle = chips[i].c; ctx.beginPath(); ctx.arc(chx, chy, 9, 0, 7); ctx.fill(); if (chips[i].letter) { ctx.fillStyle = '#06080c'; ctx.font = "700 11px 'Space Grotesk',sans-serif"; ctx.textAlign = 'center'; ctx.fillText(chips[i].letter, chx, chy + 4) } }
+    // (chips de força antigos removidos — identidade/cor agora vêm na linha de moedas ◈ abaixo)
     ctx.textAlign = 'left'; ctx.fillStyle = '#cfd6e2'; ctx.font = "600 13px 'Space Grotesk',sans-serif"
     ctx.fillText('ONDA ' + run.wave + ' / ' + MAPS[run.mapIdx].waves, 18, 58)
-    // Total de moedas — destaque central, abaixo da barra de vida; pulsa ao capturar moeda
-    const pulse = 1 + 0.04 * Math.sin(this.t * 4) + this._coinPulse * 0.32
-    ctx.save(); ctx.translate(W / 2, 64); ctx.scale(pulse, pulse)
-    ctx.textAlign = 'center'; ctx.textBaseline = 'middle'
-    ctx.shadowColor = `rgba(255,210,74,${0.6 + this._coinPulse * 0.4})`; ctx.shadowBlur = 14 + this._coinPulse * 16
-    ctx.fillStyle = '#ffe6b0'; ctx.font = "700 22px 'Space Grotesk',sans-serif"
-    ctx.fillText(this.coins + ' ✦', 0, 0)
-    ctx.restore()
-    if (this._coinPulse > 0.02) { ctx.save(); ctx.strokeStyle = this.withA('#ffe6b0', this._coinPulse * 0.7); ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(W / 2, 64, 22 + (1 - this._coinPulse) * 16, 0, 7); ctx.stroke(); ctx.restore() }
+    // ---- LINHA DE MOEDAS (revelação progressiva por fase) ----
+    // Fase 1: só ✦. Fase 2+: + uma ◈ por força liberada (na cor da força). Fase 3+: + ❖ (selo).
+    type Pill = { kind: 'luz' | 'force' | 'selo'; val: number; color: string }
+    const items: Pill[] = [{ kind: 'luz', val: this.coins, color: '#ffe6b0' }]
+    if (run.mapIdx >= 1) for (const k of this.unlockedForces) items.push({ kind: 'force', val: this.forceCoins[k], color: PATHS[k].color })
+    if (run.mapIdx >= 2) items.push({ kind: 'selo', val: this.tokens, color: '#cdb8ff' })
+    const cyR = 64, gap = 16
+    const widths = items.map(it => {
+      if (it.kind === 'luz') { ctx.font = "700 22px 'Space Grotesk',sans-serif"; return ctx.measureText(it.val + ' ✦').width }
+      ctx.font = "600 13px 'Space Grotesk',sans-serif"; return ctx.measureText((it.kind === 'force' ? '◈' : '❖') + ' ' + it.val).width
+    })
+    const totalW = widths.reduce((a, b) => a + b, 0) + gap * (items.length - 1)
+    let rx = W / 2 - totalW / 2
+    for (let i = 0; i < items.length; i++) {
+      const it = items[i], w = widths[i], midX = rx + w / 2
+      if (it.kind === 'luz') {
+        const pulse = 1 + 0.04 * Math.sin(this.t * 4) + this._coinPulse * 0.32
+        ctx.save(); ctx.translate(midX, cyR); ctx.scale(pulse, pulse)
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle'
+        ctx.shadowColor = `rgba(255,210,74,${0.6 + this._coinPulse * 0.4})`; ctx.shadowBlur = 14 + this._coinPulse * 16
+        ctx.fillStyle = '#ffe6b0'; ctx.font = "700 22px 'Space Grotesk',sans-serif"
+        ctx.fillText(this.coins + ' ✦', 0, 0); ctx.restore()
+        if (this._coinPulse > 0.02) { ctx.save(); ctx.strokeStyle = this.withA('#ffe6b0', this._coinPulse * 0.7); ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(midX, cyR, 22 + (1 - this._coinPulse) * 16, 0, 7); ctx.stroke(); ctx.restore() }
+      } else {
+        ctx.save(); ctx.textAlign = 'center'; ctx.textBaseline = 'middle'
+        ctx.shadowColor = this.withA(it.color, 0.45); ctx.shadowBlur = 6
+        ctx.fillStyle = it.color; ctx.font = "600 13px 'Space Grotesk',sans-serif"
+        ctx.fillText((it.kind === 'force' ? '◈' : '❖') + ' ' + it.val, midX, cyR + 1); ctx.restore()
+      }
+      rx += w + gap
+    }
+    // ---- fim da linha de moedas ----
     this.drawPowerIndicator(ctx, W)
   }
 
