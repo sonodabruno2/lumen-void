@@ -481,9 +481,9 @@ function Shop({ e }: { e: Engine }) {
       )}
 
       {/* Cabeçalho — overlay compacto, levemente transparente + blur (dá sensação de mais espaço) */}
-      <div style={{ position: 'absolute', top: 0, left: 0, right: 0, padding: '9px 16px 11px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, background: 'rgba(6,8,12,0.5)', backdropFilter: 'blur(10px)', WebkitBackdropFilter: 'blur(10px)', borderBottom: '1px solid rgba(255,255,255,0.06)', zIndex: 6, pointerEvents: 'none' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
-          <button onClick={e.goTitle} aria-label="Início" title="Início" style={{ flex: 'none', width: 34, height: 34, borderRadius: 10, border: '1px solid rgba(255,255,255,0.12)', background: 'rgba(10,15,24,0.5)', color: '#cfd6e2', font: `600 16px ${F}`, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'auto' }}>←</button>
+      <div style={{ position: 'absolute', top: 0, left: 0, right: 0, padding: '9px 16px 11px 8px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, background: 'rgba(6,8,12,0.5)', backdropFilter: 'blur(10px)', WebkitBackdropFilter: 'blur(10px)', borderBottom: '1px solid rgba(255,255,255,0.06)', zIndex: 6, pointerEvents: 'none' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+          <button onClick={e.goTitle} aria-label="Início" title="Início" style={{ flex: 'none', width: 30, height: 30, borderRadius: 9, border: '1px solid rgba(255,255,255,0.12)', background: 'rgba(10,15,24,0.5)', color: '#cfd6e2', font: `600 15px ${F}`, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', pointerEvents: 'auto' }}>←</button>
           <div style={{ minWidth: 0 }}>
             <div style={{ font: `500 9px ${F}`, letterSpacing: '0.28em', color: '#7f8aa0' }}>ÁRVORE DA LUZ</div>
             <div style={{ font: `300 19px ${F}`, marginTop: 1, letterSpacing: '0.02em' }}>Evolua a luz</div>
