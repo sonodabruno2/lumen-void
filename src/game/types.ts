@@ -1,7 +1,7 @@
 import type { EnemyType, ForceKey } from './data'
 
 export type Screen =
-  | 'title' | 'map' | 'game' | 'upgrade' | 'pause' | 'victory' | 'defeat' | 'poderes'
+  | 'title' | 'map' | 'game' | 'upgrade' | 'pause' | 'victory' | 'defeat' | 'poderes' | 'lab'
 
 export interface Enemy {
   x: number; y: number; type: EnemyType
@@ -67,6 +67,7 @@ export interface Summary {
   kills: number
   time: string
   selo: boolean
+  final?: boolean // venceu a ÚLTIMA fase → fim de jogo (tela de encerramento)
   dmg: { name: string; color: string; pct: number }[]
 }
 

@@ -56,8 +56,15 @@ export class Engine {
   coins = 0
   forceCoins: Record<ForceKey, number> = { storm: 0, volcano: 0, forest: 0, frost: 0, terra: 0 } // moeda própria de cada força
   perm: Record<string, number> = {}
+  variantSel: Record<string, number> = {} // estilo (variação do poder base) escolhido por força — persiste e vale no jogo
   coreUnlocked = false // 1ª visita às Melhorias: só o núcleo + CTA; após liberar, revela a Árvore da Luz
   speed = 1
+  // ---- Laboratório (sandbox de testes): níveis/forças próprios, NÃO tocam no progresso real ----
+  lab = false
+  labLevels: Record<string, number> = {}
+  labForces: ForceKey[] = []
+  labVariant: Record<string, number> = {} // variação do poder base por força ('base'/storm/...) — só no lab
+  labLuzOn = true                          // no lab dá pra DESLIGAR até a Luz
   deathLine = '' // frase exibida no topo da tela de morte
 
   // sim state
@@ -120,6 +127,7 @@ export class Engine {
   constructor(opts: EngineOpts, onChange: () => void) {
     this.opts = opts
     this.onChange = onChange
+    this.load() // restaura o progresso salvo (se houver)
   }
 
   getPublicState(): PublicState {
@@ -130,7 +138,44 @@ export class Engine {
     }
   }
   private setScreen(s: Screen) { this.screen = s; this.onChange() }
-  private touch() { this.onChange() }
+  private touch() { this.save(); this.onChange() }
+
+  // ---------- persistência (localStorage) ----------
+  // Salva SÓ o progresso permanente (não o estado de partida/sim). Chave versionada (v1).
+  private save() {
+    if (this.lab) return // no laboratório nada é persistido (níveis/forças são só de teste)
+    try {
+      localStorage.setItem('lumen_save_v1', JSON.stringify({
+        v: 1, unlocked: this.unlocked, tokens: this.tokens, unlockedForces: this.unlockedForces,
+        bossesBeaten: this.bossesBeaten, coins: this.coins, forceCoins: this.forceCoins,
+        perm: this.perm, coreUnlocked: this.coreUnlocked, lastMap: this._lastMap, variantSel: this.variantSel,
+      }))
+    } catch { /* modo privado / quota — ignora */ }
+  }
+  private load() {
+    try {
+      const raw = localStorage.getItem('lumen_save_v1'); if (!raw) return
+      const d = JSON.parse(raw); if (!d || d.v !== 1) return
+      if (typeof d.unlocked === 'number') this.unlocked = d.unlocked
+      if (typeof d.tokens === 'number') this.tokens = d.tokens
+      if (Array.isArray(d.unlockedForces)) this.unlockedForces = d.unlockedForces.filter((k: any) => k in this.forceCoins) as ForceKey[]
+      if (d.bossesBeaten && typeof d.bossesBeaten === 'object') this.bossesBeaten = d.bossesBeaten
+      if (typeof d.coins === 'number') this.coins = d.coins
+      if (d.forceCoins && typeof d.forceCoins === 'object') this.forceCoins = { ...this.forceCoins, ...d.forceCoins }
+      if (d.perm && typeof d.perm === 'object') this.perm = d.perm
+      if (typeof d.coreUnlocked === 'boolean') this.coreUnlocked = d.coreUnlocked
+      if (typeof d.lastMap === 'number') this._lastMap = d.lastMap
+      if (d.variantSel && typeof d.variantSel === 'object') this.variantSel = d.variantSel
+    } catch { /* save corrompido — ignora */ }
+  }
+  // Recomeçar do zero: apaga o save e restaura os valores iniciais.
+  resetProgress = () => {
+    try { localStorage.removeItem('lumen_save_v1') } catch { /* */ }
+    this.unlocked = 1; this.tokens = 1; this.unlockedForces = []; this.bossesBeaten = {}
+    this.coins = 0; this.forceCoins = { storm: 0, volcano: 0, forest: 0, frost: 0, terra: 0 }
+    this.perm = {}; this.variantSel = {}; this.coreUnlocked = false; this._lastMap = 0
+    this.setScreen('title')
+  }
 
   // ---------- assets ----------
   // Carrega os PNG/JPG de public/ (personagem e background). Falha silenciosa: o jogo
@@ -210,7 +255,8 @@ export class Engine {
     this.canvas.width = Math.round(r.width * this.dpr)
     this.canvas.height = Math.round(r.height * this.dpr)
     this.ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0)
-    this.cx = this.W / 2; this.cy = this.H * 0.46
+    // No laboratório o núcleo sobe (cy menor) pra não ficar atrás do painel inferior.
+    this.cx = this.W / 2; this.cy = this.H * (this.lab ? 0.30 : 0.46)
     if (!this.motes.length) this.initMotes()
     try { this.render() } catch { /* ignore pre-mount render */ }
   }
@@ -220,8 +266,10 @@ export class Engine {
     if (!node.requires) return true
     return this.lvl(node.requires) >= 1
   }
-  lvl(id: string) { return Math.min(MAX_LVL, this.perm[id] || 0) }
-  has(p: ForceKey) { return this.unlockedForces.indexOf(p) >= 0 }
+  lvl(id: string) { return Math.min(MAX_LVL, (this.lab ? this.labLevels[id] : this.perm[id]) || 0) }
+  has(p: ForceKey) { return (this.lab ? this.labForces : this.unlockedForces).indexOf(p) >= 0 }
+  variant(key: string) { return (this.lab ? this.labVariant[key] : this.variantSel[key]) || 0 } // lab usa o teste; jogo usa o estilo escolhido
+  luzActive() { return !this.lab || this.labLuzOn }
   dmgMul() { return this.run ? this.run.dmgMul : 1 }
   getMaxHP() { return 10 + this.lvl('b_hp') * 10 + this.lvl('for_vigor') * 8 }
   nodeCost(baseCost: number, id: string) { return Math.round((baseCost || 8) * Math.pow(1.5, this.lvl(id))) }
@@ -238,8 +286,8 @@ export class Engine {
   // Início: alcance curto e bala lenta. Crescem via 'Alcance' (b_range) e o nó futuro de velocidade (b_proj).
   basicStats() { const L = (id: string) => this.lvl(id); return { dmg: (1 + L('b_dmg')) * this.dmgMul(), interval: Math.max(0.3, 1.3 - L('b_rate') * 0.2), count: 1, pierce: L('b_pierce') >= 1 ? 1 : 0, pierceMul: L('b_pierce') * 0.2, range: 105 + L('b_range') * 44, projSpeed: 70 + L('b_proj') * 90, crit: L('b_crit') * 0.10, auraDmg: L('b_area') * 4 * this.dmgMul(), auraR: 74 + L('b_area') * 8, regen: L('b_regen') * 1.4 } }
   stormStats() { const L = (id: string) => this.lvl(id); return { dmg: (2 + L('storm_volt') * 2) * this.dmgMul(), interval: Math.max(0.28, 0.9 - L('storm_cad') * 0.12), chain: 2 + L('storm_chain'), range: 180 + L('storm_range') * 42, crit: L('storm_over') * 0.12 } }
-  volcanoStats() { const L = (id: string) => this.lvl(id); return { dmg: (3 + L('vol_pow') * 2) * this.dmgMul(), interval: Math.max(0.7, 1.7 - L('vol_rate') * 0.18), radius: 54 + L('vol_rad') * 14, burn: (1 + L('vol_burn') * 1) * this.dmgMul(), zoneDur: 1.4 + L('vol_zone') * 0.8 } }
-  forestStats() { const L = (id: string) => this.lvl(id); return { auraDmg: (1 + L('for_thorn') * 1) * this.dmgMul(), auraR: 90 + L('for_root') * 24, heal: 2 + L('for_heal') * 3, healInt: Math.max(0.8, 3 - L('for_regen') * 0.4) } }
+  volcanoStats() { const L = (id: string) => this.lvl(id); return { dmg: (3 + L('vol_pow') * 2) * this.dmgMul(), interval: Math.max(0.7, 1.7 - L('vol_rate') * 0.18), radius: 54 + L('vol_rad') * 14, range: 150 + L('vol_rad') * 10, burn: (1 + L('vol_burn') * 1) * this.dmgMul(), zoneDur: 1.4 + L('vol_zone') * 0.8 } }
+  forestStats() { const L = (id: string) => this.lvl(id), v = this.variant('forest'); return { auraDmg: (1 + L('for_thorn')) * this.dmgMul() * (v === 2 ? 2.2 : v === 1 ? 0.4 : v === 3 ? 0.7 : 1), auraR: (90 + L('for_root') * 24) * (v === 3 ? 1.6 : 1), heal: (2 + L('for_heal') * 3) * (v === 1 ? 2.2 : v === 2 ? 0.4 : 1), healInt: Math.max(0.8, 3 - L('for_regen') * 0.4) } } // variações no lab: 1 cura intensa · 2 espinhos+ · 3 aura ampla · 4 vampírica (lifesteal no loop)
   frostStats() { const L = (id: string) => this.lvl(id); return { slow: Math.min(0.75, 0.2 + L('fro_cold') * 0.12), novaDmg: (2 + L('fro_nova') * 2) * this.dmgMul(), freeze: 0.4 + L('fro_freeze') * 0.3, novaR: 112 + L('fro_crys') * 25, slowR: 130, dr: L('fro_barr') * 0.06, novaInt: 2.4 } }
   terraStats() { const L = (id: string) => this.lvl(id); return { dmg: (3 + L('ter_imp') * 2) * this.dmgMul(), interval: Math.max(1.4, 2.4 - L('ter_quake') * 0.2), knock: 60 + L('ter_knock') * 26, dr: L('ter_wall') * 0.07, waveR: 140 + L('ter_weight') * 30 } }
   private dr() { let d = 0; if (this.has('frost')) d += this.frostStats().dr; if (this.has('terra')) d += this.terraStats().dr; return Math.min(0.6, d) }
@@ -249,7 +297,10 @@ export class Engine {
     this._lastMap = idx
     // Começa com câmera aproximada e faz zoom-out suave para o jogo
     this._zoom = 1.5; this._zoomTarget = 1.0; this._camAngle = 0
-    this._bgLiftTarget = 0; this._waveNumT = 0 // onda 1: fundo escuro (luz cresce suave; _deathProg/_winProg fazem lerp)
+    // onda 1: fundo escuro. ZERA na hora os estados de luz — senão a run nova começava ESTOURADA
+    // de brilho após uma vitória/finale (winProg≈1) ou escura demais após uma morte (deathProg≈1).
+    this._bgLift = 0; this._bgLiftTarget = 0; this._waveNumT = 0
+    this._winProg = 0; this._deathProg = 0
     this.run = {
       mapIdx: idx, wave: 1, up: {}, coins: 0, hp: 100, maxHP: 100, kills: 0, time: 0,
       dmgMul: 1, dmgByPath: {}, hpMul: 1, speedMul: 1, dmgMulE: 1,
@@ -270,10 +321,13 @@ export class Engine {
     const m = MAPS[this.run.mapIdx], w = this.run.wave, dmul = DIFF[this.opts.difficulty] ?? 1
     const tier = this.run.mapIdx // 0..6 — mapas avançados são mais duros
     // Escalonamento: vida/velocidade/contato crescem por onda E por mapa
-    this.run.hpMul = m.hpMul * (1 + 0.45 * (w - 1)) * dmul
-    this.run.speedMul = m.speedMul * (1 + 0.05 * (w - 1))
+    this.run.hpMul = m.hpMul * (1 + 0.6 * (w - 1)) * dmul   // inimigos ficam mais robustos por onda (subiu de 0.45)
+    this.run.speedMul = m.speedMul * (1 + 0.06 * (w - 1))   // e um pouco mais rápidos por onda (subiu de 0.05)
     this.run.dmgMulE = dmul * (1 + 0.12 * tier)
-    const count = Math.round((5 + w * 3.2) * m.spawnMul)
+    // AINDA MAIS inimigos: onda 1 mantém o base; da ONDA 2 em diante vêm ~4x (≈2x do ajuste anterior),
+    // subindo a cada onda. Teto de 240 é uma trava de segurança (perf) — pode pesar nas fases finais.
+    const waveMul = w === 1 ? 1 : 4 + 0.4 * (w - 2)
+    const count = Math.min(240, Math.round((5 + w * 3.2) * m.spawnMul * waveMul))
     this.toSpawn = []
     for (let i = 0; i < count; i++) {
       // proporção de inimigos perigosos cresce com a onda e o mapa
@@ -323,14 +377,16 @@ export class Engine {
       if (dx === undefined || dy === undefined) { const ox = e.x - this.cx, oy = e.y - this.cy, om = Math.hypot(ox, oy) || 1; dx = ox / om; dy = oy / om }
       // Recompensa escala com a robustez do inimigo (e.coin: comum 1, tanque 2, chefe 15) × dificuldade da fase
       const diffMul = 1 + 0.5 * (MAPS[this.run.mapIdx].diff - 1) // dif 1..7 → 1.0..4.0
+      // Da ONDA 2 em diante o abate vale MAIS, crescendo a cada onda (a recompensa acompanha o perigo).
+      const waveVal = 1 + 0.5 * (this.run.wave - 1) // onda1=1x, onda2=1.5x, onda3=2x, onda4=2.5x...
       if (e.force) {
         // inimigo de força → dropa a moeda daquela força (sem b_luz, que é exclusivo da Luz)
-        const amt = Math.max(1, Math.round(e.coin * diffMul))
-        this.forceCoins[e.force] += amt
+        const amt = Math.max(1, Math.round(e.coin * diffMul * waveVal))
+        if (!this.lab) this.forceCoins[e.force] += amt // lab: só mostra o valor, não credita
         this.fx.push({ type: 'coin', x: e.x, y: e.y, sx: e.x, sy: e.y, dx, dy, life: 1.15, max: 1.15, text: `+${amt} ◈`, color: PATHS[e.force].color })
       } else {
-        const amt = Math.max(1, Math.round(e.coin * diffMul * (1 + this.lvl('b_luz'))))
-        this.coins += amt
+        const amt = Math.max(1, Math.round(e.coin * diffMul * waveVal * (1 + this.lvl('b_luz'))))
+        if (!this.lab) this.coins += amt // lab: só mostra o valor, não credita
         this.fx.push({ type: 'coin', x: e.x, y: e.y, sx: e.x, sy: e.y, dx, dy, life: 1.15, max: 1.15, text: `+${amt} ✦` })
       }
       if (e.boss) this._shake = 0.5
@@ -354,7 +410,7 @@ export class Engine {
     if (this.canvas) { const w = this.canvas.getBoundingClientRect().width; if (!this.W || Math.abs(w - this.W) > 1) this.resize() }
     if (!this.W) return
     // Aceleração (2x/5x) apenas durante o jogo, via sub-passos para manter a física estável
-    const steps = this.screen === 'game' ? Math.max(1, this.speed) : 1
+    const steps = (this.screen === 'game' || this.lab) ? Math.max(1, this.speed) : 1
     for (let i = 0; i < steps; i++) { this.t += dt; this.update(dt) }
     this.render()
   }
@@ -386,13 +442,13 @@ export class Engine {
     }
     for (let i = this.fx.length - 1; i >= 0; i--) { this.fx[i].life -= dt; if (this.fx[i].life <= 0) { if (this.fx[i].type === 'coin') this._coinPulse = 1; this.fx.splice(i, 1) } }
 
-    if (this.screen !== 'game' || !this.run) return
+    if ((this.screen !== 'game' && !this.lab) || !this.run) return
     const run = this.run; run.time += dt
 
     if (this.toSpawn.length) { this.spawnTimer -= dt; if (this.spawnTimer <= 0) { const s = this.toSpawn.shift()!; this.enemies.push(this.makeEnemy(s.type, s.force)); this.spawnTimer = this.spawnInterval * (0.75 + Math.random() * 0.5) } }
 
     // weapons
-    this.wpBasic(dt)
+    if (this.luzActive()) this.wpBasic(dt)
     if (this.has('storm')) this.wpStorm(dt)
     if (this.has('volcano')) this.wpVolcano(dt)
     if (this.has('frost')) this.wpFrostNova(dt)
@@ -434,7 +490,7 @@ export class Engine {
       if (e.freeze > 0) { e.freeze -= dt; e.slowF = 0 }
       else if (frs) { const d = Math.hypot(e.x - this.cx, e.y - this.cy); if (d < frs.slowR + e.r) e.slowF = Math.min(e.slowF, 1 - frs.slow) }
       if (bs.auraDmg > 0) { const d = Math.hypot(e.x - this.cx, e.y - this.cy); if (d < bs.auraR + e.r) this.damageEnemy(e, bs.auraDmg * dt, 'base') }
-      if (fs) { const d = Math.hypot(e.x - this.cx, e.y - this.cy); if (d < fs.auraR + e.r) this.damageEnemy(e, fs.auraDmg * dt, 'forest') }
+      if (fs) { const d = Math.hypot(e.x - this.cx, e.y - this.cy); if (d < fs.auraR + e.r) { this.damageEnemy(e, fs.auraDmg * dt, 'forest'); if (this.variant('forest') === 4) run.hp = Math.min(this.getMaxHP(), run.hp + fs.auraDmg * dt * 0.5) } }
       if (e.burn) { e.burn.dur -= dt; this.damageEnemy(e, e.burn.dps * dt, 'volcano'); if (e.burn.dur <= 0) e.burn = null }
     }
     for (const z of this.zones) { for (const e of this.enemies) { if (Math.hypot(e.x - z.x, e.y - z.y) < z.r + e.r) this.damageEnemy(e, z.dps * dt, 'volcano') } }
@@ -468,8 +524,14 @@ export class Engine {
     }
     this.shards = this.shards.filter(s => !s.dead)
 
+    // Laboratório: núcleo invencível, sem resolução de onda — só repõe os alvos (dummies) abatidos.
+    if (this.lab) { run.hp = this.getMaxHP(); while (this.enemies.length < 12) this.addDummy(); return }
     if (run.hp <= 0) { this.endRun(false); return }
-    if (!this._waveResolved && this.toSpawn.length === 0 && this.enemies.length === 0) {
+    // A onda só FECHA quando não há mais inimigos NEM estilhaços (shards) no ar. Um inimigo que
+    // toca o núcleo vira shards que causam o dano nos frames seguintes; sem esperar por eles, o
+    // ÚLTIMO inimigo "passava de onda/fase" ao matar o núcleo (falsa vitória). Agora o dano fatal
+    // é resolvido antes (cai no check de morte acima) → derrota, não avanço.
+    if (!this._waveResolved && this.toSpawn.length === 0 && this.enemies.length === 0 && this.shards.length === 0) {
       this._waveResolved = true
       const m = MAPS[run.mapIdx]
       // Bônus por superar a onda: ~5 abates ao valor da fase atual (escala com a dificuldade)
@@ -544,28 +606,41 @@ export class Engine {
       if (d < bd && d - e.r < s.range) { bd = d; best = e }
     }
     if (!best) return
-    this.run.tBasic = s.interval // cooldown só inicia quando realmente dispara
+    const v = this.variant('base') // 0 único · 1 leque ×3 · 2 radial ×8 · 3 perfurante · 4 veloz ×2
+    this.run.tBasic = v === 4 ? s.interval * 0.4 : s.interval // cooldown só inicia quando realmente dispara
     audio.play('shoot_basic')
     const base = Math.atan2(best.y - this.cy, best.x - this.cx)
     const spd = s.projSpeed, life = s.range / spd + 0.4
     // clarão de disparo (muzzle flash) na boca do núcleo
     this.fx.push({ type: 'spark', x: this.cx + Math.cos(base) * this.coreR, y: this.cy + Math.sin(base) * this.coreR, life: 0.16, max: 0.16, color: '#fff7e0' })
-    for (let i = 0; i < s.count; i++) { const a = base + (i - (s.count - 1) / 2) * 0.13; this.shots.push({ x: this.cx, y: this.cy, px: this.cx, py: this.cy, vx: Math.cos(a) * spd, vy: Math.sin(a) * spd, dmg: s.dmg, crit: s.crit, life, pierce: s.pierce, pierceMul: s.pierceMul, hits: 0, hit: [], target: best }) }
+    const shoot = (ang: number, pierce: number) => this.shots.push({ x: this.cx, y: this.cy, px: this.cx, py: this.cy, vx: Math.cos(ang) * spd, vy: Math.sin(ang) * spd, dmg: s.dmg, crit: s.crit, life, pierce, pierceMul: s.pierceMul, hits: 0, hit: [], target: best })
+    if (v === 1) { for (let i = 0; i < 3; i++) shoot(base + (i - 1) * 0.26, s.pierce) }        // Leque ×3
+    else if (v === 2) { for (let i = 0; i < 8; i++) shoot(i / 8 * Math.PI * 2, s.pierce) }      // Radial ×8 (em volta)
+    else if (v === 3) { shoot(base, 99) }                                                        // Perfurante (atravessa)
+    else { for (let i = 0; i < s.count; i++) shoot(base + (i - (s.count - 1) / 2) * 0.13, s.pierce) } // Único / Veloz
   }
   private wpStorm(dt: number) {
     if (!this.run) return
     this.run.tStorm -= dt; if (this.run.tStorm > 0) return
     const s = this.stormStats(); this.run.tStorm = s.interval
+    const v = this.variant('storm') // 0 cadeia · 1 raio focado · 2 tempestade · 3 salto longo · 4 para-raios
     const pool = this.enemies.filter(e => !e.dead && Math.hypot(e.x - this.cx, e.y - this.cy) < s.range)
     if (!pool.length) return
     audio.play('shoot_storm')
+    if (v === 2) { // Tempestade: atinge TODOS no alcance de uma vez
+      const o = { x: this.cx, y: this.cy }
+      for (const e of pool) { const crit = Math.random() < s.crit ? 2 : 1; this.damageEnemy(e, s.dmg * crit, 'storm'); this.fx.push({ type: 'bolt', pts: this.jagged([o, { x: e.x, y: e.y }]), life: 0.13, max: 0.13, color: '#6aa8ff' }) }
+      return
+    }
+    const chain = v === 1 ? 1 : (v === 3 ? s.chain + 2 : s.chain), jump = v === 3 ? 220 : 130, dmgMul = v === 1 ? 2.6 : 1
     let cur = { x: this.cx, y: this.cy }; const hit: Enemy[] = [], pts = [{ x: this.cx, y: this.cy }]
-    for (let i = 0; i < s.chain; i++) {
+    for (let i = 0; i < chain; i++) {
       let best: Enemy | null = null, bd = 1e9
-      for (const e of pool) { if (hit.indexOf(e) >= 0) continue; const d = Math.hypot(e.x - cur.x, e.y - cur.y); if (d < bd) { bd = d; best = e } }
-      if (!best || bd > (i === 0 ? s.range : 130)) break
+      for (const e of pool) { if (hit.indexOf(e) >= 0) continue; const m = (v === 4 && i === 0) ? -e.hp : Math.hypot(e.x - cur.x, e.y - cur.y); if (m < bd) { bd = m; best = e } } // para-raios: 1º = mais forte
+      if (!best) break
+      if (!(v === 4 && i === 0) && Math.hypot(best.x - cur.x, best.y - cur.y) > (i === 0 ? s.range : jump)) break
       const crit = Math.random() < s.crit ? 2 : 1
-      this.damageEnemy(best, s.dmg * crit, 'storm'); if (crit > 1) best.freeze = Math.max(best.freeze, 0.15)
+      this.damageEnemy(best, s.dmg * crit * dmgMul, 'storm'); if (crit > 1) best.freeze = Math.max(best.freeze, 0.15)
       hit.push(best); pts.push({ x: best.x, y: best.y }); cur = best
     }
     if (pts.length > 1) this.fx.push({ type: 'bolt', pts: this.jagged(pts), life: 0.16, max: 0.16, color: '#6aa8ff' })
@@ -574,31 +649,50 @@ export class Engine {
   private wpVolcano(dt: number) {
     if (!this.run) return
     this.run.tVol -= dt; if (this.run.tVol > 0) return
-    const s = this.volcanoStats(); this.run.tVol = s.interval
-    const pool = this.enemies.filter(e => !e.dead); if (!pool.length) return
+    const s = this.volcanoStats()
+    const v = this.variant('volcano') // 0 erupção · 1 meteoros ×3 · 2 anel de lava · 3 bomba · 4 lança-chamas
+    this.run.tVol = v === 3 ? s.interval * 1.6 : (v === 4 ? s.interval * 0.45 : s.interval)
+    // SÓ inimigos dentro do alcance (não explode/dana além do range — regra geral dos tiros)
+    const pool = this.enemies.filter(e => !e.dead && Math.hypot(e.x - this.cx, e.y - this.cy) < s.range + e.r); if (!pool.length) return
     audio.play('shoot_volcano')
-    let t: Enemy | null = null, bd = 1e9
-    for (const e of pool) { const d = Math.hypot(e.x - this.cx, e.y - this.cy); if (d < bd) { bd = d; t = e } }
-    const px = t!.x, py = t!.y
-    for (const e of pool) { if (Math.hypot(e.x - px, e.y - py) < s.radius + e.r) { this.damageEnemy(e, s.dmg, 'volcano'); e.burn = { dps: s.burn, dur: 2 } } }
-    this.zones.push({ x: px, y: py, r: s.radius * 0.82, dps: s.burn, dur: s.zoneDur })
-    this.fx.push({ type: 'boom', x: px, y: py, r: s.radius, life: 0.42, max: 0.42, color: '#ff8a4c' }); this._shake = Math.max(this._shake, 0.12)
+    const blast = (px: number, py: number, rad: number, dmg: number, zone: boolean) => {
+      for (const e of pool) { if (Math.hypot(e.x - px, e.y - py) < rad + e.r) { this.damageEnemy(e, dmg, 'volcano'); e.burn = { dps: s.burn, dur: 2 } } }
+      if (zone) this.zones.push({ x: px, y: py, r: rad * 0.82, dps: s.burn, dur: s.zoneDur })
+      this.fx.push({ type: 'boom', x: px, y: py, r: rad, life: 0.42, max: 0.42, color: '#ff8a4c' })
+    }
+    const nearN = (n: number) => pool.slice().sort((a, b) => Math.hypot(a.x - this.cx, a.y - this.cy) - Math.hypot(b.x - this.cx, b.y - this.cy)).slice(0, n)
+    if (v === 1) { for (const e of nearN(3)) blast(e.x, e.y, s.radius * 0.6, s.dmg * 0.7, false) }      // Meteoros ×3
+    else if (v === 2) { blast(this.cx, this.cy, s.radius * 1.5, s.dmg, true) }                            // Anel de lava (no núcleo)
+    else if (v === 3) { const t = nearN(1)[0]; blast(t.x, t.y, s.radius * 1.7, s.dmg * 2.2, true) }         // Bomba
+    else if (v === 4) { const t = nearN(1)[0]; blast(t.x, t.y, s.radius * 0.8, s.dmg, false) }              // Lança-chamas
+    else { const t = nearN(1)[0]; blast(t.x, t.y, s.radius, s.dmg, true) }                                  // Erupção
+    this._shake = Math.max(this._shake, 0.12)
   }
   private wpFrostNova(dt: number) {
     if (!this.run) return
     this.run.tFrost -= dt; if (this.run.tFrost > 0) return
-    const s = this.frostStats(); this.run.tFrost = s.novaInt
+    const s = this.frostStats()
+    const v = this.variant('frost') // 0 nova · 1 ampla · 2 congelante · 3 explosiva · 4 rápida
+    this.run.tFrost = v === 4 ? s.novaInt * 0.5 : s.novaInt
+    const novaR = v === 1 ? s.novaR * 1.6 : (v === 3 ? s.novaR * 0.7 : s.novaR)
+    const dmg = v === 1 ? s.novaDmg * 0.6 : (v === 2 ? s.novaDmg * 0.4 : (v === 3 ? s.novaDmg * 2.2 : s.novaDmg))
+    const freeze = v === 2 ? s.freeze * 2.6 : s.freeze
     audio.play('shoot_frost')
-    for (const e of this.enemies) { if (Math.hypot(e.x - this.cx, e.y - this.cy) < s.novaR + e.r) { this.damageEnemy(e, s.novaDmg, 'frost'); e.freeze = Math.max(e.freeze, s.freeze) } }
-    this.fx.push({ type: 'nova', x: this.cx, y: this.cy, r: s.novaR, life: 0.5, max: 0.5, color: '#bfeaff' })
+    for (const e of this.enemies) { if (Math.hypot(e.x - this.cx, e.y - this.cy) < novaR + e.r) { this.damageEnemy(e, dmg, 'frost'); e.freeze = Math.max(e.freeze, freeze) } }
+    this.fx.push({ type: 'nova', x: this.cx, y: this.cy, r: novaR, life: 0.5, max: 0.5, color: '#bfeaff' })
   }
   private wpTerra(dt: number) {
     if (!this.run) return
     this.run.tTerra -= dt; if (this.run.tTerra > 0) return
-    const s = this.terraStats(); this.run.tTerra = s.interval
+    const s = this.terraStats()
+    const v = this.variant('terra') // 0 tremor · 1 gravidade (puxa) · 2 abalo amplo · 3 impacto · 4 rápido
+    this.run.tTerra = v === 4 ? s.interval * 0.5 : s.interval
+    const waveR = v === 2 ? s.waveR * 1.6 : (v === 3 ? s.waveR * 0.7 : s.waveR)
+    const dmg = v === 3 ? s.dmg * 2.4 : s.dmg
+    const knock = v === 1 ? -s.knock : (v === 2 ? s.knock * 0.4 : (v === 3 ? s.knock * 1.6 : s.knock)) // Gravidade: knock negativo = puxa
     audio.play('shoot_terra')
-    for (const e of this.enemies) { const dx = e.x - this.cx, dy = e.y - this.cy, d = Math.hypot(dx, dy) || 1; if (d < s.waveR + e.r) { this.damageEnemy(e, s.dmg, 'terra'); e.vx += (dx / d) * s.knock; e.vy += (dy / d) * s.knock } }
-    this.fx.push({ type: 'wave', x: this.cx, y: this.cy, r: s.waveR, life: 0.45, max: 0.45, color: '#d8b274' }); this._shake = Math.max(this._shake, 0.14)
+    for (const e of this.enemies) { const dx = e.x - this.cx, dy = e.y - this.cy, d = Math.hypot(dx, dy) || 1; if (d < waveR + e.r) { this.damageEnemy(e, dmg, 'terra'); e.vx += (dx / d) * knock; e.vy += (dy / d) * knock } }
+    this.fx.push({ type: 'wave', x: this.cx, y: this.cy, r: waveR, life: 0.45, max: 0.45, color: '#d8b274' }); this._shake = Math.max(this._shake, 0.14)
   }
   private wpForestHeal(dt: number) {
     if (!this.run) return
@@ -619,19 +713,49 @@ export class Engine {
     const forces = ['base', ...this.unlockedForces]
     const total = Object.values(run.dmgByPath).reduce((a, b) => a + b, 0) || 1
     const dmg = forces.map(p => ({ name: p === 'base' ? 'Luz' : PATHS[p as ForceKey].name, color: p === 'base' ? '#ffe6b0' : PATHS[p as ForceKey].color, pct: Math.round((run.dmgByPath[p] || 0) / total * 100) }))
-    this.summary = { win, wave: win ? m.waves : run.wave, waves: m.waves, kills: run.kills, time: this.fmtTime(run.time), selo, dmg }
+    this.summary = { win, wave: win ? m.waves : run.wave, waves: m.waves, kills: run.kills, time: this.fmtTime(run.time), selo, final: win && run.mapIdx === MAPS.length - 1, dmg }
     // A run terminou: limpa o estado de partida (forças/selos são permanentes e ficam)
     this.run = null
     this.enemies = []; this.shots = []; this.shards = []; this.zones = []
     if (!win) this.deathLine = DEATH_LINES[Math.floor(Math.random() * DEATH_LINES.length)]
     audio.play(win ? 'victory' : 'defeat')
-    this.setScreen(win ? 'victory' : 'defeat')
+    // Vitória → tela de vitória. Derrota: tela de morte normal; PORÉM se a Luz ainda não foi
+    // despertada (run 1), leva DIRETO às Melhorias — funil da sequência inicial (jogar → morrer → despertar a Luz).
+    this.setScreen(win ? 'victory' : (this.coreUnlocked ? 'defeat' : 'poderes'))
   }
 
   // ---------- actions (called from React) ----------
   goTitle = () => this.setScreen('title')
   goMap = () => { if (this.unlocked === 1) this.startRun(0); else this.setScreen('map') }
   goPoderes = () => this.setScreen('poderes')
+
+  // ---------- Laboratório (sandbox) ----------
+  private addDummy() {
+    const a = Math.random() * Math.PI * 2 // alvo de teste: parado, num anel ao redor do núcleo, sem dano de contato
+    const e = this.makeEnemy('tank')
+    e.x = this.cx + Math.cos(a) * 92; e.y = this.cy + Math.sin(a) * 92
+    e.sp = 0; e.dps = 0; e.hp = 60; e.maxhp = 60; e.fade = 1; e.force = undefined
+    this.enemies.push(e)
+  }
+  startLab = () => {
+    this.lab = true; this.labLevels = {}; this.labForces = []; this.labVariant = {}; this.labLuzOn = true; this.speed = 1
+    this.run = {
+      mapIdx: 0, wave: 1, up: {}, coins: 0, hp: 100, maxHP: 100, kills: 0, time: 0,
+      dmgMul: 1, dmgByPath: {}, hpMul: 1, speedMul: 1, dmgMulE: 0,
+      tBasic: 0.2, tStorm: 0.3, tVol: 0.6, tFrost: 1.0, tTerra: 0.9, tForest: 1.0,
+    }
+    this.run.hp = this.getMaxHP()
+    this.enemies = []; this.zones = []; this.shots = []; this.shards = []; this.fx = []
+    this.resize() // recalcula cy (núcleo mais p/ cima no lab) ANTES de posicionar os alvos
+    for (let i = 0; i < 12; i++) this.addDummy()
+    this.setScreen('lab')
+  }
+  exitLab = () => { this.lab = false; this.run = null; this.enemies = []; this.shots = []; this.zones = []; this.shards = []; this.fx = []; this.resize(); this.setScreen('title') }
+  labToggleForce = (k: ForceKey) => { const i = this.labForces.indexOf(k); if (i >= 0) this.labForces.splice(i, 1); else this.labForces.push(k); this.touch() }
+  labSetLevel = (id: string, delta: number) => { this.labLevels[id] = Math.max(0, Math.min(MAX_LVL, (this.labLevels[id] || 0) + delta)); this.touch() }
+  labRespawn = () => { this.enemies = []; for (let i = 0; i < 12; i++) this.addDummy() }
+  labSetVariant = (key: string, idx: number) => { this.labVariant[key] = idx; this.touch() }
+  labToggleLuz = () => { this.labLuzOn = !this.labLuzOn; this.touch() }
   // Libera a Árvore da Luz gastando 1 ❖ (1ª compra do jogo). Guard idempotente + de saldo.
   unlockCore = () => { if (this.coreUnlocked) return; if (this.tokens <= 0) return; this.tokens--; this.coreUnlocked = true; this.touch() }
   pauseGame = () => this.setScreen('pause')
@@ -643,6 +767,8 @@ export class Engine {
   retry = () => this.startRun(this._lastMap)
   nextPhase = () => this.startRun(Math.min(MAPS.length - 1, this._lastMap + 1))
   setSpeed = (n: number) => { this.speed = n; this.touch() }
+  // Estilo do poder (variação do poder base) escolhido nas Melhorias — vale no jogo e é salvo.
+  setVariant = (key: string, idx: number) => { this.variantSel[key] = idx; this.touch() }
   lastUpgraded = '' // id do último nó comprado (para posicionar câmera na loja)
 
   buyNode = (baseCost: number, id: string) => {
@@ -773,6 +899,10 @@ export class Engine {
       if (bs.auraDmg > 0) { ctx.strokeStyle = this.withA('#ffe6b0', 0.14 + 0.05 * Math.sin(this.t * 2)); ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(cx, cy, bs.auraR, 0, 7); ctx.stroke() }
       if (this.has('forest')) { const s = this.forestStats(); ctx.strokeStyle = this.withA('#74e3a0', 0.18 + 0.06 * Math.sin(this.t * 2)); ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(cx, cy, s.auraR, 0, 7); ctx.stroke() }
       if (this.has('frost')) { const s = this.frostStats(); ctx.strokeStyle = this.withA('#bfeaff', 0.12); ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(cx, cy, s.slowR, 0, 7); ctx.stroke() }
+      // anel de alcance de cada arma, na SUA cor (todo tiro tem seu range — exceto ricochete do Storm)
+      if (this.has('storm')) { const s = this.stormStats(); ctx.strokeStyle = this.withA('#6aa8ff', 0.1); ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(cx, cy, s.range, 0, 7); ctx.stroke() }
+      if (this.has('volcano')) { const s = this.volcanoStats(); ctx.strokeStyle = this.withA('#ff8a4c', 0.1); ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(cx, cy, s.range, 0, 7); ctx.stroke() }
+      if (this.has('terra')) { const s = this.terraStats(); ctx.strokeStyle = this.withA('#d8b274', 0.1); ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(cx, cy, s.waveR, 0, 7); ctx.stroke() }
     }
     // enemies
     for (const e of this.enemies) {
@@ -803,9 +933,9 @@ export class Engine {
       const a = Math.max(0, f.life / f.max)
       if (f.type === 'bolt' && f.pts) { ctx.save(); if (glow) { ctx.shadowColor = f.color!; ctx.shadowBlur = 10 } ctx.strokeStyle = this.withA(f.color!, a); ctx.lineWidth = 2.4; ctx.beginPath(); f.pts.forEach((p, i) => i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)); ctx.stroke(); ctx.strokeStyle = this.withA('#ffffff', a * 0.8); ctx.lineWidth = 1; ctx.stroke(); ctx.restore() }
       else if (f.type === 'boom') { const rad = f.r! * (0.4 + (1 - a) * 0.6); const bg = ctx.createRadialGradient(f.x!, f.y!, 2, f.x!, f.y!, rad); bg.addColorStop(0, this.withA('#ffd9a0', a * 0.7)); bg.addColorStop(0.6, this.withA(f.color!, a * 0.5)); bg.addColorStop(1, this.withA(f.color!, 0)); ctx.fillStyle = bg; ctx.beginPath(); ctx.arc(f.x!, f.y!, rad, 0, 7); ctx.fill() }
-      else if (f.type === 'nova') { const rad = f.r! * (1 - a * 0.85); ctx.strokeStyle = this.withA(f.color!, a * 0.8); ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(f.x!, f.y!, rad, 0, 7); ctx.stroke() }
+      else if (f.type === 'nova') { const rad = f.r! * Math.max(0, 1 - a * 0.85); ctx.strokeStyle = this.withA(f.color!, a * 0.8); ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(f.x!, f.y!, rad, 0, 7); ctx.stroke() }
       else if (f.type === 'wave') { const rad = f.r! * (0.5 + (1 - a) * 0.5); ctx.strokeStyle = this.withA(f.color!, a * 0.7); ctx.lineWidth = 5 * a + 1; ctx.beginPath(); ctx.arc(f.x!, f.y!, rad, 0, 7); ctx.stroke() }
-      else if (f.type === 'shock') { const age = 1 - a; ctx.save(); if (glow) { ctx.shadowColor = f.color!; ctx.shadowBlur = 12 } ctx.strokeStyle = this.withA(f.color!, a * 0.85); ctx.lineWidth = 4 * a + 1.5; ctx.beginPath(); ctx.arc(f.x!, f.y!, f.r! * age, 0, 7); ctx.stroke(); ctx.strokeStyle = this.withA('#ffffff', a * 0.55); ctx.lineWidth = 2.5 * a + 0.5; ctx.beginPath(); ctx.arc(f.x!, f.y!, f.r! * age * 0.6, 0, 7); ctx.stroke(); ctx.restore() }
+      else if (f.type === 'shock') { const age = Math.max(0, 1 - a); ctx.save(); if (glow) { ctx.shadowColor = f.color!; ctx.shadowBlur = 12 } ctx.strokeStyle = this.withA(f.color!, a * 0.85); ctx.lineWidth = 4 * a + 1.5; ctx.beginPath(); ctx.arc(f.x!, f.y!, f.r! * age, 0, 7); ctx.stroke(); ctx.strokeStyle = this.withA('#ffffff', a * 0.55); ctx.lineWidth = 2.5 * a + 0.5; ctx.beginPath(); ctx.arc(f.x!, f.y!, f.r! * age * 0.6, 0, 7); ctx.stroke(); ctx.restore() }
       else if (f.type === 'death') { const rad = f.r! * (1 + (1 - a) * 1.6); ctx.strokeStyle = this.withA(f.color!, a * 0.7); ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(f.x!, f.y!, rad, 0, 7); ctx.stroke() }
       else if (f.type === 'spark') { ctx.fillStyle = this.withA(f.color!, a); ctx.beginPath(); ctx.arc(f.x!, f.y!, 3 * (0.5 + a), 0, 7); ctx.fill() }
       else if (f.type === 'heal') { ctx.fillStyle = this.withA('#9bf0b8', a); ctx.font = "600 16px 'Space Grotesk',sans-serif"; ctx.textAlign = 'center'; ctx.fillText('+', f.x! + 18, f.y! - 30 - (1 - a) * 22) }

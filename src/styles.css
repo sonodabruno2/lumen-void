@@ -14,5 +14,47 @@ html, body { margin: 0; padding: 0; background: #000; overscroll-behavior: none;
 /* Aura do núcleo: respira (escala + opacidade), mantendo o centro */
 @keyframes lumenBreath { 0%, 100% { transform: translate(-50%,-50%) scale(0.9); opacity: 0.6 } 50% { transform: translate(-50%,-50%) scale(1.14); opacity: 1 } }
 
+/* Força trancada (run 1): glifo flutua devagar PERTO do lugar (drift suave em x/y) */
+@keyframes floatBob {
+  0%   { transform: translate(calc(-50% - 3px), calc(-50% + 3px)); }
+  50%  { transform: translate(calc(-50% + 3px), calc(-50% - 5px)); }
+  100% { transform: translate(calc(-50% - 3px), calc(-50% + 3px)); }
+}
+/* Símbolo da força gira LEVE no eixo horizontal (rotateY), com perspectiva */
+@keyframes spinY {
+  0%, 100% { transform: perspective(320px) rotateY(-32deg); }
+  50%      { transform: perspective(320px) rotateY(32deg); }
+}
+/* Órbita de partículas em volta do núcleo adormecido */
+@keyframes orbit { to { transform: translate(-50%,-50%) rotate(360deg); } }
+/* Núcleo adormecido: cintila de leve antes de despertar */
+@keyframes dormantFlicker { 0%, 100% { opacity: 0.62; } 45% { opacity: 0.9; } 70% { opacity: 0.7; } }
+
+/* ----- Despertar da Luz (revival) ----- */
+@keyframes awakenFlash {
+  0%   { transform: translate(-50%,-50%) scale(0.2); opacity: 0; }
+  18%  { opacity: 1; }
+  100% { transform: translate(-50%,-50%) scale(3.6); opacity: 0; }
+}
+@keyframes awakenRing {
+  0%   { transform: translate(-50%,-50%) scale(0.22); opacity: 0.9; }
+  100% { transform: translate(-50%,-50%) scale(2.9); opacity: 0; }
+}
+@keyframes awakenRays {
+  0%   { transform: translate(-50%,-50%) scale(0.4) rotate(0deg); opacity: 0; }
+  30%  { opacity: 0.85; }
+  100% { transform: translate(-50%,-50%) scale(2) rotate(74deg); opacity: 0; }
+}
+/* Fluxo do selo ❖ → Luz: chevrons que acendem em sequência (roxo→dourado) */
+@keyframes flowPulse { 0%, 100% { opacity: 0.18; transform: translateX(-2px); } 50% { opacity: 1; transform: translateX(2px); } }
+/* Tooltip da força flutuante (mantém o -50% x ao surgir) */
+@keyframes tipIn { 0% { opacity: 0; transform: translate(-50%, 4px); } 100% { opacity: 1; transform: translate(-50%, 0); } }
+@keyframes awakenText {
+  0%   { opacity: 0; transform: translate(-50%,8px); letter-spacing: 0.2em; }
+  40%  { opacity: 1; }
+  78%  { opacity: 1; }
+  100% { opacity: 0; transform: translate(-50%,-4px); letter-spacing: 0.46em; }
+}
+
 button { transition: transform .16s ease, box-shadow .25s ease, border-color .25s ease; }
 button:active:not(:disabled) { transform: scale(0.96); }

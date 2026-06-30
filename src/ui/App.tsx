@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useReducer, useRef, useState } from 'react'
 import { Engine, MAX_LVL, type EngineOpts } from '../game/engine'
-import { BASE, PATHS, MAPS, ORDER, type ForceKey } from '../game/data'
+import { BASE, PATHS, MAPS, ORDER, VARIANTS, type ForceKey } from '../game/data'
 import { UpIcon } from './icons'
 import { withA } from './color'
 import { audio } from '../game/audio'
@@ -49,6 +49,7 @@ export default function App() {
           {(s === 'upgrade' || s === 'poderes') && <Shop e={e} />}
           {s === 'victory' && <End e={e} />}
           {s === 'defeat' && <DeathScreen e={e} />}
+          {s === 'lab' && <Lab e={e} />}
         </>) : <AccessGate onUnlock={() => setAccess(true)} />}
       </div>
     </div>
@@ -118,6 +119,7 @@ function SpeedControl({ e }: { e: Engine }) {
 
 // ---------- Title ----------
 function Title({ e }: { e: Engine }) {
+  const [confirmReset, setConfirmReset] = useState(false) // recomeçar pede 2 toques (evita zerar sem querer)
   return (
     <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', justifyContent: 'space-between', alignItems: 'center', padding: '11% 30px 12%', textAlign: 'center' }}>
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14 }}>
@@ -127,9 +129,21 @@ function Title({ e }: { e: Engine }) {
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12, width: '100%', maxWidth: 300 }}>
         <button onClick={e.goMap} style={primaryBtn}>Jogar</button>
-        <button onClick={e.goPoderes} style={{ padding: 15, borderRadius: 14, border: '1px solid rgba(255,255,255,0.16)', background: 'rgba(255,255,255,0.03)', color: '#e8edf4', font: `500 15px ${F}`, cursor: 'pointer' }}>
-          Melhorias{e.coins > 0 ? <> · <span style={{ color: '#ffe6b0' }}>{e.coins} ✦</span></> : ''}
-        </button>
+        {/* Run 1: a Luz ainda não foi despertada → só JOGAR. Melhorias aparece após o despertar. */}
+        {e.coreUnlocked && (
+          <button onClick={e.goPoderes} style={{ padding: 15, borderRadius: 14, border: '1px solid rgba(255,255,255,0.16)', background: 'rgba(255,255,255,0.03)', color: '#e8edf4', font: `500 15px ${F}`, cursor: 'pointer' }}>
+            Melhorias{e.coins > 0 ? <> · <span style={{ color: '#ffe6b0' }}>{e.coins} ✦</span></> : ''}
+          </button>
+        )}
+        {/* Recomeçar: só aparece quando há progresso salvo (Luz despertada). 2 toques p/ confirmar. */}
+        {e.coreUnlocked && (
+          <button onClick={() => { if (confirmReset) { e.resetProgress() } else { setConfirmReset(true); setTimeout(() => setConfirmReset(false), 3000) } }}
+            style={{ marginTop: 2, padding: 9, borderRadius: 11, border: 'none', background: 'transparent', color: confirmReset ? '#e8a0a0' : '#5f6a7c', font: `500 12px ${F}`, letterSpacing: '0.04em', cursor: 'pointer' }}>
+            {confirmReset ? 'Tem certeza? Toque de novo para apagar tudo' : 'Recomeçar'}
+          </button>
+        )}
+        {/* Ferramenta de teste: sandbox de poderes (não afeta o progresso) */}
+        <button onClick={e.startLab} style={{ marginTop: 2, padding: 9, borderRadius: 11, border: '1px solid rgba(255,255,255,0.1)', background: 'transparent', color: '#9aa9bd', font: `500 12px ${F}`, letterSpacing: '0.04em', cursor: 'pointer' }}>🧪 Laboratório</button>
       </div>
     </div>
   )
@@ -174,6 +188,70 @@ function Pause({ e }: { e: Engine }) {
       <h2 style={{ font: `300 30px ${F}`, margin: '0 0 10px', letterSpacing: '0.04em' }}>Pausa</h2>
       <button onClick={e.resume} style={{ width: '100%', maxWidth: 280, padding: 15, borderRadius: 13, border: 'none', background: '#ffe6b0', color: '#1a1206', font: `600 15px ${F}`, cursor: 'pointer' }}>Continuar</button>
       <button onClick={e.abandon} style={{ width: '100%', maxWidth: 280, padding: 14, borderRadius: 13, border: '1px solid rgba(255,255,255,0.14)', background: 'transparent', color: '#c98a8a', font: `500 14px ${F}`, cursor: 'pointer' }}>Abandonar run</button>
+    </div>
+  )
+}
+
+// ---------- Laboratório (sandbox de testes de poder) ----------
+function Lab({ e }: { e: Engine }) {
+  const speeds = [1, 2, 5, 10]
+  const cycleSpeed = () => { const i = speeds.indexOf(e.speed); e.setSpeed(speeds[(i + 1) % speeds.length]) }
+  const stepBtn: React.CSSProperties = { width: 28, height: 28, flex: 'none', borderRadius: 8, border: 'none', background: 'rgba(255,255,255,0.09)', color: '#e8edf4', font: `700 16px ${F}`, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }
+  const sections = [
+    ...(e.labLuzOn ? [{ key: 'base', name: 'LUZ', color: BASE.color, nodes: BASE.nodes as any[] }] : []),
+    ...ORDER.filter(k => e.labForces.includes(k)).map(k => ({ key: k as string, name: PATHS[k].name.toUpperCase(), color: PATHS[k].color, nodes: PATHS[k].nodes as any[] })),
+  ]
+  return (
+    <div style={{ position: 'absolute', left: 0, right: 0, bottom: 0, height: '44%', display: 'flex', flexDirection: 'column', background: 'rgba(6,8,12,0.93)', backdropFilter: 'blur(8px)', WebkitBackdropFilter: 'blur(8px)', borderTop: '1px solid rgba(255,255,255,0.1)', borderRadius: '16px 16px 0 0' }}>
+      {/* cabeçalho */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 12px', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+        <button onClick={e.exitLab} aria-label="Voltar" style={{ flex: 'none', width: 30, height: 30, borderRadius: 9, border: '1px solid rgba(255,255,255,0.12)', background: 'rgba(10,15,24,0.5)', color: '#cfd6e2', font: `600 15px ${F}`, cursor: 'pointer' }}>←</button>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ font: `500 9px ${F}`, letterSpacing: '0.28em', color: '#7f8aa0' }}>LABORATÓRIO</div>
+          <div style={{ font: `300 16px ${F}`, marginTop: 1 }}>Teste de poderes</div>
+        </div>
+        <button onClick={e.labRespawn} style={{ flex: 'none', padding: '6px 10px', borderRadius: 9, border: '1px solid rgba(255,255,255,0.14)', background: 'transparent', color: '#cfd6e2', font: `600 11px ${F}`, cursor: 'pointer' }}>Alvos</button>
+        <button onClick={cycleSpeed} style={{ flex: 'none', minWidth: 40, padding: '6px 10px', borderRadius: 9, border: 'none', background: e.speed > 1 ? '#ffe6b0' : 'rgba(255,255,255,0.09)', color: e.speed > 1 ? '#1a1206' : '#e8edf4', font: `700 12px ${F}`, cursor: 'pointer' }}>{e.speed}×</button>
+      </div>
+      {/* toggles de força — Luz também pode ser desligada */}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, padding: '8px 12px 6px' }}>
+        <button onClick={e.labToggleLuz} style={{ padding: '5px 10px', borderRadius: 9, border: `1px solid ${e.labLuzOn ? withA(BASE.color, 0.6) : 'rgba(255,255,255,0.14)'}`, background: e.labLuzOn ? withA(BASE.color, 0.18) : 'transparent', color: e.labLuzOn ? BASE.color : '#8a95a6', font: `700 11px ${F}`, cursor: 'pointer' }}>LUZ</button>
+        {ORDER.map(k => {
+          const on = e.labForces.includes(k); const col = PATHS[k].color
+          return (
+            <button key={k} onClick={() => e.labToggleForce(k)} style={{ padding: '5px 10px', borderRadius: 9, border: `1px solid ${on ? col : 'rgba(255,255,255,0.14)'}`, background: on ? withA(col, 0.18) : 'transparent', color: on ? col : '#8a95a6', font: `600 11px ${F}`, cursor: 'pointer' }}>{PATHS[k].name}</button>
+          )
+        })}
+      </div>
+      {/* níveis por nó (rolável) */}
+      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '2px 12px 16px' }}>
+        {sections.map(sec => (
+          <div key={sec.key} style={{ marginBottom: 8 }}>
+            {/* título + SELECT de variação do poder base (5 opções) */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, margin: '8px 0 3px' }}>
+              <div style={{ font: `700 10px ${F}`, letterSpacing: '0.14em', color: sec.color }}>{sec.name}</div>
+              <select value={e.variant(sec.key)} onChange={ev => e.labSetVariant(sec.key, +ev.target.value)}
+                style={{ flex: 'none', maxWidth: 152, padding: '4px 6px', borderRadius: 8, border: `1px solid ${withA(sec.color, 0.4)}`, background: 'rgba(10,15,24,0.7)', color: '#e8edf4', font: `600 10px ${F}`, cursor: 'pointer' }}>
+                {VARIANTS[sec.key].map((name, i) => <option key={i} value={i} style={{ background: '#0c1118', color: '#e8edf4' }}>{name}</option>)}
+              </select>
+            </div>
+            {sec.nodes.map((n: any) => {
+              const L = e.lvl(n.id)
+              return (
+                <div key={n.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '3px 0' }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ font: `600 11px ${F}`, color: '#e8edf4', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{n.name}</div>
+                    <div style={{ font: `400 9px ${F}`, color: '#8a95a6', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{n.desc}</div>
+                  </div>
+                  <button onClick={() => e.labSetLevel(n.id, -1)} style={stepBtn}>−</button>
+                  <div style={{ minWidth: 32, textAlign: 'center', font: `700 12px ${F}`, color: L > 0 ? sec.color : '#5f6a7c' }}>{L}/{MAX_LVL}</div>
+                  <button onClick={() => e.labSetLevel(n.id, 1)} style={stepBtn}>+</button>
+                </div>
+              )
+            })}
+          </div>
+        ))}
+      </div>
     </div>
   )
 }
@@ -365,6 +443,8 @@ function RadialTree({ e, selected, onSelect, lastUpgraded, fromGate }: { e: Engi
           const a = BR_ANGLE[k] * Math.PI / 180
           const lx = CX + Math.cos(a) * 78, ly = CY + Math.sin(a) * 78
           const unlocked = e.has(k)
+          // Modo flutuante (run 1, sem selo): o nome é carregado pelo glifo flutuante — não duplica o rótulo fixo.
+          if (!unlocked && !(e.tokens > 0 && e.unlockedForces.length < 2)) return null
           const col = PATHS[k].color // sempre a cor do caminho, mesmo trancada
           return (
             <div key={'flbl' + k} style={{ position: 'absolute', left: lx, top: ly, transform: 'translate(-50%,-50%)', font: `700 9px ${F}`, letterSpacing: '0.16em', whiteSpace: 'nowrap', pointerEvents: 'none', zIndex: 2, color: col, opacity: unlocked ? 1 : 0.92, textShadow: `0 0 3px rgba(6,8,12,0.95), 0 0 8px ${withA(col, unlocked ? 0.75 : 0.45)}` }}>
@@ -374,10 +454,16 @@ function RadialTree({ e, selected, onSelect, lastUpgraded, fromGate }: { e: Engi
         })}
         {/* título do caminho da Luz (mesmo estilo dos títulos das forças) */}
         <div style={{ position: 'absolute', left: CX, top: CY - 78, transform: 'translate(-50%,-50%)', font: `700 9px ${F}`, letterSpacing: '0.16em', whiteSpace: 'nowrap', pointerEvents: 'none', zIndex: 2, color: BASE.color, textShadow: `0 0 3px rgba(6,8,12,0.95), 0 0 8px ${withA(BASE.color, 0.75)}` }}>LUZ</div>
-        {pts.map(p => (
-          <NodeCard key={p.id} e={e} p={p} st={stateOf(p.meta)} selected={selected === p.id}
-            onSelect={() => { if (!drag.current?.moved) onSelect(p.id) }} />
-        ))}
+        {pts.map(p => {
+          const st = stateOf(p.meta)
+          // Run 1 (força trancada e SEM Selo ❖ pra gastar): nada de card — só o símbolo + nome flutuando.
+          if (st === 'force' && !(e.tokens > 0 && e.unlockedForces.length < 2))
+            return <FloatingForce key={p.id} p={p} idx={ORDER.indexOf(p.meta.force!)} />
+          return (
+            <NodeCard key={p.id} e={e} p={p} st={st} selected={selected === p.id}
+              onSelect={() => { if (!drag.current?.moved) onSelect(p.id) }} />
+          )
+        })}
       </div>
       {/* controles de zoom */}
       <div style={{ position: 'absolute', bottom: 8, left: '50%', transform: 'translateX(-50%)', display: 'flex', alignItems: 'center', gap: 6, padding: '4px 6px', borderRadius: 20, background: 'rgba(10,15,24,0.6)', border: '1px solid rgba(255,255,255,0.1)', backdropFilter: 'blur(6px)', zIndex: 2 }}>
@@ -415,6 +501,39 @@ function SegRing({ level, color, size, justFilled }: { level: number; color: str
   )
 }
 
+// Força ainda trancada na run 1 (sem Selo ❖): NÃO mostra card de melhoria — apenas o
+// símbolo + nome, flutuando devagar perto do lugar e girando de leve no eixo horizontal.
+function FloatingForce({ p, idx }: { p: TreePt; idx: number }) {
+  const col = p.meta.color
+  const name = PATHS[p.meta.force!].name.toUpperCase()
+  const driftDelay = (-idx * 0.7).toFixed(2) + 's'  // desincroniza o drift entre as forças
+  const spinDelay = (-idx * 0.5).toFixed(2) + 's'
+  const [show, setShow] = useState(false) // ao clicar, mostra a mensagem por alguns segundos
+  const hideT = useRef<number | null>(null)
+  useEffect(() => () => { if (hideT.current) clearTimeout(hideT.current) }, [])
+  const tap = () => { setShow(true); if (hideT.current) clearTimeout(hideT.current); hideT.current = window.setTimeout(() => setShow(false), 2800) }
+  return (
+    <div onPointerDown={ev => ev.stopPropagation()} onClick={tap}
+      style={{ position: 'absolute', left: p.x, top: p.y, transform: 'translate(-50%,-50%)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, cursor: 'pointer', animation: `floatBob 5.5s ease-in-out ${driftDelay} infinite` }}>
+      {/* símbolo: losango da cor da força, girando levemente em rotateY */}
+      <div style={{ width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center', animation: `spinY 7s ease-in-out ${spinDelay} infinite` }}>
+        <div style={{ width: 26, height: 26, transform: 'rotate(45deg)', borderRadius: 7,
+          background: `linear-gradient(135deg, ${withA(col, 0.5)}, ${withA(col, 0.1)})`,
+          border: `1.5px solid ${withA(col, 0.7)}`,
+          boxShadow: `0 0 12px ${withA(col, 0.5)}, inset 0 0 8px ${withA(col, 0.35)}` }} />
+      </div>
+      {/* nome flutuante, na cor do caminho */}
+      <div style={{ font: `700 9px ${F}`, letterSpacing: '0.16em', whiteSpace: 'nowrap', color: col, textShadow: `0 0 3px rgba(6,8,12,0.95), 0 0 8px ${withA(col, 0.5)}` }}>{name}</div>
+      {/* mensagem ao clicar: a força só libera vencendo a 1ª partida */}
+      {show && (
+        <div style={{ position: 'absolute', top: '100%', left: '50%', marginTop: 5, transform: 'translate(-50%,0)', width: 128, padding: '6px 9px', borderRadius: 9, background: 'rgba(10,12,18,0.94)', border: `1px solid ${withA(col, 0.45)}`, boxShadow: `0 0 14px ${withA(col, 0.3)}`, font: `500 8.5px/1.32 ${F}`, color: '#dfe5ee', textAlign: 'center', pointerEvents: 'none', zIndex: 6, animation: 'tipIn .22s ease' }}>
+          Vença a partida 1 para liberar a força.
+        </div>
+      )}
+    </div>
+  )
+}
+
 // Card de um nó da árvore. Estado mínimo: anel + ícone + badge de nível.
 // Selecionado: expande e mostra descrição + botão de compra. Pulso/brilho ao comprar.
 function NodeCard({ e, p, st, selected, onSelect }: { e: Engine; p: TreePt; st: string; selected: boolean; onSelect: () => void }) {
@@ -432,7 +551,9 @@ function NodeCard({ e, p, st, selected, onSelect }: { e: Engine; p: TreePt; st: 
   const canBuy = buyable && canAfford
   const isEntry = !node.requires // raiz da cadeia (nó de entrada da força)
   const invite = st === 'force' && canUnlock && isEntry // entrada de força a liberar (você tem selo ❖)
-  const lockedPath = st === 'force' && isEntry // força trancada → card elaborado "liberar caminho" (sempre expandido)
+  // Card ELABORADO de "liberar caminho" — força trancada COM Selo ❖ pra gastar (após vencer uma fase).
+  // (Sem selo, na run 1, a força nem chega aqui: vira um glifo flutuante na RadialTree.)
+  const lockedPath = st === 'force' && isEntry
   const expand = selected || lockedPath
 
   // pulso visual quando o nível sobe (retorno da compra)
@@ -481,7 +602,7 @@ function NodeCard({ e, p, st, selected, onSelect }: { e: Engine; p: TreePt; st: 
       </div>
 
       {/* rótulo curto */}
-      <div style={{ font: `700 ${expand ? 10 : 8.5}px/1.05 ${F}`, letterSpacing: '0.02em', color: lockedPath ? col : (dim ? '#8a95a6' : '#e8edf4') }}>{mystery ? '???' : lockedPath ? PATHS[force!].name.toUpperCase() : shortOf(node.id, node.name)}</div>
+      <div style={{ font: `700 ${expand ? 10 : 8.5}px/1.05 ${F}`, letterSpacing: '0.02em', color: st === 'force' ? col : (dim ? '#8a95a6' : '#e8edf4') }}>{mystery ? '???' : st === 'force' ? PATHS[force!].name.toUpperCase() : shortOf(node.id, node.name)}</div>
 
       {/* detalhes claros — só quando selecionado */}
       {expand && (mystery ? (
@@ -503,26 +624,60 @@ function NodeCard({ e, p, st, selected, onSelect }: { e: Engine; p: TreePt; st: 
 function Shop({ e }: { e: Engine }) {
   const [sel, setSel] = useState('') // ao abrir a loja, nada selecionado
   const [fromGate, setFromGate] = useState(false) // acabou de acordar o núcleo → transição sutil p/ a árvore
+  // Despertar a Luz: abre a Árvore da Luz NA HORA (sem cerimônia) — a transição fromGate faz a revelação suave.
+  const awaken = () => {
+    if (e.tokens < 1) return
+    audio.play('upgrade')
+    e.unlockCore(); setFromGate(true)
+  }
 
   // Rolagem das fases: começa mostrando a MAIS RECENTE (à direita); as antigas ficam à esquerda.
   const phaseScroll = useRef<HTMLDivElement>(null)
   useEffect(() => { const el = phaseScroll.current; if (el) el.scrollLeft = el.scrollWidth }, [e.unlocked, e.coreUnlocked])
 
-  // 1ª visita: o núcleo é o ponto de partida — só ele + mensagem + CTA. Liberar revela a Árvore da Luz.
+  // 1ª visita às Melhorias (na run 1, sempre vinda da morte): a Luz está adormecida — só ela + CTA.
+  // Despertá-la revela a Árvore da Luz com uma animação de revival (mostra a Luz voltando à vida).
   if (!e.coreUnlocked) {
+    const fromDeath = !!e.summary && !e.summary.win // chegou aqui após morrer → enquadra como "reacender"
     return (
-      <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 26, padding: '40px 28px', background: 'rgba(6,8,12,0.88)', backdropFilter: 'blur(7px)' }}>
-        <div style={{ position: 'absolute', top: 0, left: 0, right: 0, padding: '56px 30px 0', textAlign: 'center', pointerEvents: 'none' }}>
-          <div style={{ font: `500 10px ${F}`, letterSpacing: '0.34em', color: '#7f8aa0', marginBottom: 12 }}>O NÚCLEO</div>
-          <div style={{ font: `300 21px/1.45 ${F}`, color: '#dfe5ee', letterSpacing: '0.01em', textShadow: '0 0 24px rgba(220,228,238,0.18)' }}>Acorde o núcleo e desperte a Luz —<br />o único caminho para começar. Custa 1 ❖.</div>
+      <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 26, padding: '40px 28px', background: 'rgba(6,8,12,0.9)', backdropFilter: 'blur(7px)', overflow: 'hidden' }}>
+        <div style={{ position: 'absolute', top: 0, left: 0, right: 0, padding: '70px 34px 0', textAlign: 'center', pointerEvents: 'none' }}>
+          <div style={{ font: `300 23px/1.5 ${F}`, color: '#e4e9f1', letterSpacing: '0.01em', textShadow: '0 0 24px rgba(220,228,238,0.2)' }}>{fromDeath ? 'A Luz se apagou no vazio.' : 'A Luz adormeceu no vazio.'}</div>
         </div>
-        <div style={{ position: 'relative', width: 120, height: 120, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+
+        {/* núcleo adormecido + órbitas */}
+        <div style={{ position: 'relative', width: 120, height: 120, display: 'flex', alignItems: 'center', justifyContent: 'center', filter: 'brightness(0.92)' }}>
+          {/* órbitas de partículas — dão vida ao núcleo adormecido */}
+          {[0, 1].map(o => (
+            <div key={o} style={{ position: 'absolute', left: '50%', top: '50%', width: o ? 152 : 104, height: o ? 152 : 104, transform: 'translate(-50%,-50%)', animation: `orbit ${o ? 11 : 7}s linear ${o ? '-3s' : '0s'} infinite` }}>
+              <div style={{ position: 'absolute', top: 0, left: '50%', transform: 'translate(-50%,-50%)', width: o ? 4 : 5, height: o ? 4 : 5, borderRadius: '50%', background: '#ffe6b0', boxShadow: '0 0 8px rgba(255,230,176,0.9)' }} />
+            </div>
+          ))}
           <div style={{ position: 'absolute', left: '50%', top: '50%', width: 200, height: 200, transform: 'translate(-50%,-50%)', borderRadius: '50%', background: 'radial-gradient(circle, rgba(255,236,190,0.3), rgba(255,230,176,0.05) 50%, rgba(255,230,176,0) 72%)', animation: 'lumenBreath 3.2s ease-in-out infinite' }} />
           <div style={{ position: 'absolute', left: '50%', top: '50%', width: 96, height: 96, transform: 'translate(-50%,-50%)', borderRadius: '50%', background: 'radial-gradient(circle, rgba(255,249,228,0.8), rgba(255,232,182,0.25) 52%, rgba(255,230,176,0) 76%)' }} />
-          <img src={`${import.meta.env.BASE_URL}hero.png`} alt="" draggable={false} style={{ position: 'relative', width: 42, height: 'auto', filter: 'drop-shadow(0 0 3px #fffef8) drop-shadow(0 0 8px rgba(255,240,200,0.95)) drop-shadow(0 0 18px rgba(255,224,160,0.85)) drop-shadow(0 0 32px rgba(255,208,130,0.55))', animation: 'lvpop 2.8s ease-in-out infinite' }} />
+          {/* herói adormecido (cintila de leve até despertar) */}
+          <img src={`${import.meta.env.BASE_URL}hero.png`} alt="" draggable={false} style={{ position: 'relative', width: 42, height: 'auto', filter: 'drop-shadow(0 0 3px #fffef8) drop-shadow(0 0 8px rgba(255,240,200,0.95)) drop-shadow(0 0 18px rgba(255,224,160,0.85)) drop-shadow(0 0 32px rgba(255,208,130,0.55))', animation: 'dormantFlicker 2.6s ease-in-out infinite' }} />
         </div>
-        <div style={{ font: `600 13px ${F}`, color: '#d9b8ff', marginTop: -8 }}>{e.tokens} ❖ disponível</div>
-        <button onClick={() => { e.unlockCore(); setFromGate(true) }} disabled={e.tokens < 1} style={{ width: '100%', maxWidth: 320, padding: 16, borderRadius: 14, border: 'none', background: e.tokens >= 1 ? '#ffe6b0' : 'rgba(255,255,255,0.07)', color: e.tokens >= 1 ? '#1a1206' : '#8a95a6', font: `700 15px ${F}`, cursor: e.tokens >= 1 ? 'pointer' : 'default', boxShadow: e.tokens >= 1 ? '0 0 34px rgba(255,230,176,0.4)' : 'none' }}>Acordar o núcleo · 1 ❖</button>
+
+        {/* Visual do gasto: você TEM o selo ❖ → ele flui e vira PODER para a Luz */}
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, marginTop: -8 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            {/* selo que você possui */}
+            <div style={{ width: 46, height: 46, borderRadius: 13, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'linear-gradient(140deg, rgba(217,184,255,0.3), rgba(217,184,255,0.05))', border: '1.5px solid rgba(217,184,255,0.6)', boxShadow: '0 0 16px rgba(217,184,255,0.4)', font: `700 22px ${F}`, color: '#ece0ff' }}>❖</div>
+            {/* fluxo: do selo (roxo) para a Luz (dourado) */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              {['#cdb8ff', '#e6cfa8', '#ffe0a0'].map((c, i) => (
+                <span key={i} style={{ font: `700 16px ${F}`, lineHeight: 1, color: c, animation: `flowPulse 1.3s ease-in-out ${(i * 0.18).toFixed(2)}s infinite` }}>›</span>
+              ))}
+            </div>
+            {/* a Luz recebendo o poder */}
+            <div style={{ width: 46, height: 46, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'radial-gradient(circle, rgba(255,244,210,0.5), rgba(255,230,176,0.12) 60%, rgba(255,230,176,0) 78%)', border: '1.5px solid rgba(255,224,160,0.55)', boxShadow: '0 0 18px rgba(255,224,160,0.45)', animation: 'lvpop 2.4s ease-in-out infinite' }}>
+              <span style={{ font: `700 18px ${F}`, color: '#fff3d0', textShadow: '0 0 10px rgba(255,224,160,0.9)' }}>✦</span>
+            </div>
+          </div>
+          <div style={{ font: `600 11px ${F}`, letterSpacing: '0.03em', color: '#b9a6e0' }}>Invista <span style={{ color: '#ece0ff' }}>{e.tokens} ❖</span> para dar mais poder à <span style={{ color: '#ffe0a0' }}>Luz</span></div>
+        </div>
+        <button onClick={awaken} disabled={e.tokens < 1} style={{ width: '100%', maxWidth: 320, padding: 16, borderRadius: 14, border: 'none', background: e.tokens >= 1 ? '#ffe6b0' : 'rgba(255,255,255,0.07)', color: e.tokens >= 1 ? '#1a1206' : '#8a95a6', font: `700 15px ${F}`, cursor: e.tokens >= 1 ? 'pointer' : 'default', boxShadow: e.tokens >= 1 ? '0 0 34px rgba(255,230,176,0.4)' : 'none' }}>Despertar a Luz · 1 ❖</button>
         <button onClick={e.goTitle} style={{ position: 'absolute', bottom: 22, left: 20, right: 20, padding: 12, borderRadius: 13, border: '1px solid rgba(255,255,255,0.12)', background: 'transparent', color: '#8a95a6', font: `500 13px ${F}`, cursor: 'pointer' }}>← Início</button>
       </div>
     )
@@ -559,6 +714,20 @@ function Shop({ e }: { e: Engine }) {
             ? <div style={{ font: `700 11px ${F}`, color: '#1a1026', background: '#d9b8ff', padding: '4px 9px', borderRadius: 9, boxShadow: `0 0 16px ${withA('#d9b8ff', 0.6)}`, animation: 'lvpop 2.2s ease-in-out infinite' }}>{e.tokens} ❖ Liberar força</div>
             : <div style={{ font: `600 13px ${F}`, color: '#d9b8ff' }}>{e.tokens} ❖</div>}
         </div>
+      </div>
+
+      {/* Estilo do poder base (variação) — Luz + forças liberadas; vale no jogo e é salvo */}
+      <div style={{ padding: '4px 14px 0', display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', justifyContent: 'center' }}>
+        <span style={{ font: `500 8px ${F}`, letterSpacing: '0.24em', color: '#7f8aa0', width: '100%', textAlign: 'center', marginBottom: 1 }}>ESTILO DO PODER</span>
+        {[{ key: 'base', name: 'LUZ', color: BASE.color }, ...e.unlockedForces.map(k => ({ key: k as string, name: PATHS[k].name.toUpperCase(), color: PATHS[k].color }))].map(p => (
+          <div key={p.key} style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+            <span style={{ font: `700 9px ${F}`, letterSpacing: '0.08em', color: p.color }}>{p.name}</span>
+            <select value={e.variant(p.key)} onChange={ev => e.setVariant(p.key, +ev.target.value)}
+              style={{ padding: '4px 6px', borderRadius: 8, border: `1px solid ${withA(p.color, 0.4)}`, background: 'rgba(10,15,24,0.7)', color: '#e8edf4', font: `600 10px ${F}`, cursor: 'pointer' }}>
+              {VARIANTS[p.key].map((n, i) => <option key={i} value={i} style={{ background: '#0c1118', color: '#e8edf4' }}>{n}</option>)}
+            </select>
+          </div>
+        ))}
       </div>
 
       {/* Footer — só fases/jogar (o voltar foi para o topo, antes do título) */}
@@ -618,6 +787,21 @@ function DeathScreen({ e }: { e: Engine }) {
 // ---------- Victory (bioma libertado — mesmo layout da derrota, em luz plena) ----------
 function End({ e }: { e: Engine }) {
   const sm = e.summary!
+  // FIM DE JOGO: venceu o Coração do Vazio (última fase) → tela de encerramento (não "Nova Fase").
+  if (sm.final) {
+    return (
+      <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', padding: '40px 30px', gap: 16, background: 'radial-gradient(circle at 50% 38%, rgba(250,246,236,0.92), rgba(247,243,233,0.97))' }}>
+        <div style={{ font: `600 11px ${F}`, letterSpacing: '0.42em', color: '#a08a4e' }}>O VAZIO FOI VENCIDO</div>
+        <div style={{ font: `300 50px ${F}`, color: '#14161c', lineHeight: 1, letterSpacing: '0.02em', textShadow: '0 0 30px rgba(255,220,150,0.4)' }}>A Luz Triunfou</div>
+        <div style={{ font: `400 14px ${F}`, color: '#5a5340', maxWidth: 300, lineHeight: 1.55 }}>O Coração do Vazio se dissolveu. A Luz que você cultivou preencheu cada recanto da escuridão.</div>
+        <div style={{ font: `400 12px ${F}`, color: '#7a6f54', marginTop: 4, opacity: 0.85 }}>{sm.kills} dissipadas · {sm.time} · {sm.waves} ondas</div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 11, width: '100%', maxWidth: 320, marginTop: 16 }}>
+          <button onClick={e.goTitle} style={{ ...primaryBtn }}>Voltar ao Início</button>
+          <button onClick={e.retry} style={{ padding: 14, borderRadius: 13, border: '1px solid rgba(28,31,38,0.22)', background: 'transparent', color: '#3a3528', font: `500 14px ${F}`, cursor: 'pointer' }}>Enfrentar o Vazio de novo</button>
+        </div>
+      </div>
+    )
+  }
   return (
    <>
     {/* topo: Vitória grande + selo de poder à frente */}

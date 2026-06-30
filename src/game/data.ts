@@ -107,21 +107,14 @@ export const PATHS: Record<ForceKey, Branch> = {
   },
 }
 
-// 7 biomas — dificuldade e nº de ondas crescem a cada mapa (+1 onda por mapa)
+// 3 biomas — arco curto e INTENSO (intro → provação → final). A dificuldade dá saltos
+// grandes a cada fase, então só um build sólido (Luz + 2 forças) vence o Coração do Vazio.
 export const MAPS: MapDef[] = [
-  { id: 'clareira',   name: 'Clareira Esquecida',   waves: 5,  diff: 1, hpMul: 1.0,  spawnMul: 1.0,  speedMul: 1.0,
+  { id: 'clareira', name: 'Clareira Esquecida', waves: 6,  diff: 1, hpMul: 1.0,  spawnMul: 1.0,  speedMul: 1.0,
     palette: { void: '#0c1410', glow: '#2f7048', accent: '#6fe09b' } },
-  { id: 'caldeira',   name: 'Caldeira Cinza',       waves: 6,  diff: 2, hpMul: 1.35, spawnMul: 1.18, speedMul: 1.1,
-    palette: { void: '#150d0a', glow: '#7a3717', accent: '#ff8a4c' } },
-  { id: 'abismo',     name: 'Abismo Glacial',       waves: 7,  diff: 3, hpMul: 1.75, spawnMul: 1.38, speedMul: 1.2,
+  { id: 'abismo',   name: 'Abismo Glacial',     waves: 9,  diff: 4, hpMul: 2.4,  spawnMul: 1.7,  speedMul: 1.32,
     palette: { void: '#0a1018', glow: '#24477a', accent: '#86c4ff' } },
-  { id: 'dunas',      name: 'Dunas do Eco',         waves: 8,  diff: 4, hpMul: 2.2,  spawnMul: 1.6,  speedMul: 1.32,
-    palette: { void: '#14110a', glow: '#7a5a1e', accent: '#e8c074' } },
-  { id: 'tempestade', name: 'Tempestade Suspensa',  waves: 9,  diff: 5, hpMul: 2.7,  spawnMul: 1.85, speedMul: 1.44,
-    palette: { void: '#0d0a16', glow: '#3a2f7a', accent: '#9a8aff' } },
-  { id: 'pantano',    name: 'Pântano Umbroso',      waves: 10, diff: 6, hpMul: 3.3,  spawnMul: 2.1,  speedMul: 1.56,
-    palette: { void: '#0a1410', glow: '#1e6a52', accent: '#5fe0b0' } },
-  { id: 'vazio',      name: 'Coração do Vazio',     waves: 11, diff: 7, hpMul: 4.0,  spawnMul: 2.4,  speedMul: 1.7,
+  { id: 'vazio',    name: 'Coração do Vazio',   waves: 12, diff: 7, hpMul: 4.4,  spawnMul: 2.35, speedMul: 1.7,
     palette: { void: '#160a12', glow: '#6a1e3a', accent: '#ff6a8a' } },
 ]
 
@@ -134,4 +127,15 @@ export const ENEMY_CFG: Record<EnemyType, { hp: number; r: number; sp: number; d
   fast:  { hp: 1,  r: 9,  sp: 30, dps: 8,  coin: 1, rim: '#7d6ba0' },
   tank:  { hp: 5,  r: 18, sp: 9,  dps: 18, coin: 2, rim: '#86705a' },
   boss:  { hp: 22, r: 38, sp: 9,  dps: 30, coin: 15, rim: '#c0607a' },
+}
+
+// Variações do "poder base" por força — usadas SÓ no Laboratório (select de 5 opções cada).
+// A ordem bate com o índice lido em engine.variant(key) (0..4).
+export const VARIANTS: Record<string, string[]> = {
+  base:    ['Tiro único', 'Leque ×3', 'Radial ×8', 'Perfurante', 'Veloz ×2'],
+  storm:   ['Cadeia', 'Raio focado', 'Tempestade', 'Salto longo', 'Para-raios'],
+  volcano: ['Erupção', 'Meteoros ×3', 'Anel de lava', 'Bomba', 'Lança-chamas'],
+  frost:   ['Nova', 'Nova ampla', 'Congelante', 'Explosiva', 'Rápida'],
+  terra:   ['Tremor', 'Gravidade', 'Abalo amplo', 'Impacto', 'Rápido'],
+  forest:  ['Espinhos + Cura', 'Cura intensa', 'Espinhos+', 'Aura ampla', 'Vampírica'],
 }
