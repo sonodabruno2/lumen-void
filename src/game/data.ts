@@ -28,6 +28,7 @@ export interface MapDef {
   hpMul: number
   spawnMul: number
   speedMul: number
+  ramp?: number // acentua a PROGRESSÃO de dificuldade por onda (HP/velocidade). 1 = padrão; >1 = sobe mais rápido
   palette: { void: string; glow: string; accent: string }
 }
 
@@ -112,9 +113,9 @@ export const PATHS: Record<ForceKey, Branch> = {
 export const MAPS: MapDef[] = [
   { id: 'clareira', name: 'Clareira Esquecida', waves: 6,  diff: 1, hpMul: 1.0,  spawnMul: 1.0,  speedMul: 1.0,
     palette: { void: '#0c1410', glow: '#2f7048', accent: '#6fe09b' } },
-  { id: 'abismo',   name: 'Abismo Glacial',     waves: 9,  diff: 4, hpMul: 2.4,  spawnMul: 1.7,  speedMul: 1.32,
+  { id: 'abismo',   name: 'Abismo Glacial',     waves: 10, diff: 5, hpMul: 2.7,  spawnMul: 1.9,  speedMul: 1.4,  ramp: 1.5,
     palette: { void: '#0a1018', glow: '#24477a', accent: '#86c4ff' } },
-  { id: 'vazio',    name: 'Coração do Vazio',   waves: 12, diff: 7, hpMul: 4.4,  spawnMul: 2.35, speedMul: 1.7,
+  { id: 'vazio',    name: 'Coração do Vazio',   waves: 12, diff: 7, hpMul: 6.8,  spawnMul: 2.5,  speedMul: 1.7,  ramp: 1.25,
     palette: { void: '#160a12', glow: '#6a1e3a', accent: '#ff6a8a' } },
 ]
 

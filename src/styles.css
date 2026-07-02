@@ -49,6 +49,8 @@ html, body { margin: 0; padding: 0; background: #000; overscroll-behavior: none;
 @keyframes flowPulse { 0%, 100% { opacity: 0.18; transform: translateX(-2px); } 50% { opacity: 1; transform: translateX(2px); } }
 /* Tooltip da força flutuante (mantém o -50% x ao surgir) */
 @keyframes tipIn { 0% { opacity: 0; transform: translate(-50%, 4px); } 100% { opacity: 1; transform: translate(-50%, 0); } }
+/* Barra de progresso do "vídeo" de recompensa (dev) */
+@keyframes adFill { from { width: 0%; } to { width: 100%; } }
 @keyframes awakenText {
   0%   { opacity: 0; transform: translate(-50%,8px); letter-spacing: 0.2em; }
   40%  { opacity: 1; }

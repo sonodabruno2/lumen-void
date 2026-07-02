@@ -4,6 +4,7 @@ import { BASE, PATHS, MAPS, ORDER, VARIANTS, type ForceKey } from '../game/data'
 import { UpIcon } from './icons'
 import { withA } from './color'
 import { audio } from '../game/audio'
+import { showRewardedAd } from '../game/ads'
 
 const F = "'Space Grotesk',sans-serif"
 
@@ -102,18 +103,58 @@ function MuteBtn() {
 }
 
 function SpeedControl({ e }: { e: Engine }) {
-  // Um único ícone que CICLA as velocidades a cada clique (sem botões separados).
+  // Acelerar (2×/5×/10×) é uma RECOMPENSA por assistir um vídeo. Bloqueado = 🔒; ao assistir libera a partida.
+  // Em modo DEV o "vídeo" é simulado (3s) e a recompensa é entregue ao final.
   const speeds = [1, 2, 5, 10]
+  const [modal, setModal] = useState<'' | 'offer'>('')
+  const [note, setNote] = useState('')
+  const timers = useRef<number[]>([])
+  useEffect(() => () => { timers.current.forEach(clearTimeout) }, [])
+  const after = (ms: number, fn: () => void) => { timers.current.push(window.setTimeout(fn, ms)) }
+
   const cycle = () => { const i = speeds.indexOf(e.speed); e.setSpeed(speeds[(i + 1) % speeds.length]) }
-  const accel = e.speed > 1 // destaca quando acelerado
+  // DEV: não exibe vídeo — só ATIVA e mostra a mensagem. Em produção o AdMob mostra o vídeo antes de resolver.
+  const activate = async () => {
+    const ok = await showRewardedAd()
+    setModal('')
+    if (!ok) return
+    e.adFast = true; e.setSpeed(2) // recompensa: libera 2×/5×/10× e já entra em 2×
+    setNote('📺 Anúncio ativado · jogo acelerado liberado!')
+    after(2800, () => setNote(''))
+  }
+  const accel = e.speed > 1
+
   return (
-    <button onClick={cycle} aria-label="Velocidade" title="Velocidade (toque para alternar)"
-      style={{ position: 'absolute', bottom: 16, left: 16, minWidth: 54, height: 38, padding: '0 12px', borderRadius: 11, cursor: 'pointer',
-        border: `1px solid ${accel ? 'transparent' : 'rgba(255,255,255,0.12)'}`, background: accel ? '#ffe6b0' : 'rgba(10,15,24,0.5)',
-        color: accel ? '#1a1206' : '#cfd6e2', font: `700 15px ${F}`, letterSpacing: '0.02em', display: 'flex', alignItems: 'center', justifyContent: 'center',
-        backdropFilter: 'blur(6px)', boxShadow: accel ? '0 0 16px rgba(255,230,176,0.35)' : 'none' }}>
-      {e.speed}×
-    </button>
+    <>
+      {/* botão de velocidade (canto inf. esq.) — bloqueado até assistir o vídeo */}
+      {e.adFast ? (
+        <button onClick={cycle} aria-label="Velocidade" title="Velocidade"
+          style={{ position: 'absolute', bottom: 16, left: 16, minWidth: 54, height: 38, padding: '0 12px', borderRadius: 11, cursor: 'pointer', border: `1px solid ${accel ? 'transparent' : 'rgba(255,255,255,0.12)'}`, background: accel ? '#ffe6b0' : 'rgba(10,15,24,0.5)', color: accel ? '#1a1206' : '#cfd6e2', font: `700 15px ${F}`, display: 'flex', alignItems: 'center', justifyContent: 'center', backdropFilter: 'blur(6px)', boxShadow: accel ? '0 0 16px rgba(255,230,176,0.35)' : 'none' }}>
+          {e.speed}×
+        </button>
+      ) : (
+        <button onClick={() => setModal('offer')} aria-label="Acelerar" title="Assista um vídeo e acelere o jogo"
+          style={{ position: 'absolute', bottom: 16, left: 16, height: 38, padding: '0 11px', borderRadius: 11, cursor: 'pointer', border: '1px solid rgba(255,230,176,0.55)', background: 'rgba(255,230,176,0.12)', color: '#ffe6b0', font: `700 14px ${F}`, display: 'flex', alignItems: 'center', gap: 5, backdropFilter: 'blur(6px)', boxShadow: '0 0 14px rgba(255,230,176,0.18)' }}>
+          <span style={{ fontSize: 12 }}>🔒</span>2×<span style={{ fontSize: 12, opacity: 0.85 }}>📺</span>
+        </button>
+      )}
+
+      {/* nota discreta no canto inf. dir. — confirma a recompensa */}
+      {note && <div style={{ position: 'absolute', bottom: 9, right: 11, maxWidth: 186, padding: '4px 8px', borderRadius: 8, background: 'rgba(10,15,24,0.5)', border: '1px solid rgba(255,255,255,0.06)', font: `500 9px ${F}`, color: '#9aa9bd', textAlign: 'right', pointerEvents: 'none', animation: 'fadeUp .3s ease' }}>{note}</div>}
+
+      {/* TELA DE RECOMPENSA (oferta cativante) */}
+      {modal === 'offer' && (
+        <div style={{ position: 'absolute', inset: 0, zIndex: 20, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 15, padding: 30, background: 'rgba(6,8,12,0.88)', backdropFilter: 'blur(8px)' }}>
+          <div style={{ font: `600 10px ${F}`, letterSpacing: '0.34em', color: '#a08a4e' }}>RECOMPENSA</div>
+          <div style={{ font: `300 31px ${F}`, color: '#fff', textAlign: 'center', lineHeight: 1.1, textShadow: '0 0 24px rgba(255,230,176,0.3)' }}>Acelere o jogo ⚡</div>
+          <div style={{ display: 'flex', gap: 8 }}>{[2, 5, 10].map(s => <div key={s} style={{ padding: '6px 13px', borderRadius: 10, background: 'rgba(255,230,176,0.14)', border: '1px solid rgba(255,230,176,0.4)', color: '#ffe6b0', font: `700 16px ${F}` }}>{s}×</div>)}</div>
+          <div style={{ font: `400 13px ${F}`, color: '#9aa9bd', textAlign: 'center', maxWidth: 280, lineHeight: 1.5 }}>Assista a um vídeo rápido e jogue acelerado o resto desta partida.</div>
+          <button onClick={activate} style={{ width: '100%', maxWidth: 300, marginTop: 4, padding: 15, borderRadius: 14, border: 'none', background: '#ffe6b0', color: '#1a1206', font: `700 15px ${F}`, cursor: 'pointer', boxShadow: '0 0 30px rgba(255,230,176,0.45)' }}>▶ Assistir vídeo</button>
+          <button onClick={() => setModal('')} style={{ padding: '8px 14px', borderRadius: 11, border: '1px solid rgba(255,255,255,0.14)', background: 'transparent', color: '#8a95a6', font: `500 13px ${F}`, cursor: 'pointer' }}>Agora não</button>
+        </div>
+      )}
+
+    </>
   )
 }
 

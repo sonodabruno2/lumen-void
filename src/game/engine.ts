@@ -59,6 +59,7 @@ export class Engine {
   variantSel: Record<string, number> = {} // estilo (variação do poder base) escolhido por força — persiste e vale no jogo
   coreUnlocked = false // 1ª visita às Melhorias: só o núcleo + CTA; após liberar, revela a Árvore da Luz
   speed = 1
+  adFast = false // recompensa por anúncio: libera as velocidades 2×/5×/10× nesta partida (reseta a cada run)
   // ---- Laboratório (sandbox de testes): níveis/forças próprios, NÃO tocam no progresso real ----
   lab = false
   labLevels: Record<string, number> = {}
@@ -271,7 +272,7 @@ export class Engine {
   variant(key: string) { return (this.lab ? this.labVariant[key] : this.variantSel[key]) || 0 } // lab usa o teste; jogo usa o estilo escolhido
   luzActive() { return !this.lab || this.labLuzOn }
   dmgMul() { return this.run ? this.run.dmgMul : 1 }
-  getMaxHP() { return 10 + this.lvl('b_hp') * 10 + this.lvl('for_vigor') * 8 }
+  getMaxHP() { return 30 + this.lvl('b_hp') * 10 + this.lvl('for_vigor') * 8 } // base 30: 1 toque não mata; a horda ainda vence a run 1
   nodeCost(baseCost: number, id: string) { return Math.round((baseCost || 8) * Math.pow(1.5, this.lvl(id))) }
   private hexToRgb(h: string): [number, number, number] { const x = parseInt(h.slice(1), 16); return [(x >> 16) & 255, (x >> 8) & 255, x & 255] }
   private withA(h: string, a: number) { const c = this.hexToRgb(h); return `rgba(${c[0]},${c[1]},${c[2]},${a})` }
@@ -295,6 +296,7 @@ export class Engine {
   // ---------- run lifecycle ----------
   startRun(idx: number) {
     this._lastMap = idx
+    this.speed = 1; this.adFast = false // cada partida começa em velocidade normal; acelerar exige anúncio
     // Começa com câmera aproximada e faz zoom-out suave para o jogo
     this._zoom = 1.5; this._zoomTarget = 1.0; this._camAngle = 0
     // onda 1: fundo escuro. ZERA na hora os estados de luz — senão a run nova começava ESTOURADA
@@ -321,13 +323,15 @@ export class Engine {
     const m = MAPS[this.run.mapIdx], w = this.run.wave, dmul = DIFF[this.opts.difficulty] ?? 1
     const tier = this.run.mapIdx // 0..6 — mapas avançados são mais duros
     // Escalonamento: vida/velocidade/contato crescem por onda E por mapa
-    this.run.hpMul = m.hpMul * (1 + 0.6 * (w - 1)) * dmul   // inimigos ficam mais robustos por onda (subiu de 0.45)
-    this.run.speedMul = m.speedMul * (1 + 0.06 * (w - 1))   // e um pouco mais rápidos por onda (subiu de 0.05)
+    const ramp = m.ramp ?? 1 // a fase pode ACENTUAR a progressão de dificuldade por onda (Abismo = 1.5)
+    this.run.hpMul = m.hpMul * (1 + 0.6 * ramp * (w - 1)) * dmul   // inimigos mais robustos por onda (× ramp da fase)
+    this.run.speedMul = m.speedMul * (1 + 0.06 * ramp * (w - 1))   // e mais rápidos por onda (× ramp da fase)
     this.run.dmgMulE = dmul * (1 + 0.12 * tier)
-    // AINDA MAIS inimigos: onda 1 mantém o base; da ONDA 2 em diante vêm ~4x (≈2x do ajuste anterior),
-    // subindo a cada onda. Teto de 240 é uma trava de segurança (perf) — pode pesar nas fases finais.
-    const waveMul = w === 1 ? 1 : 4 + 0.4 * (w - 2)
-    const count = Math.min(240, Math.round((5 + w * 3.2) * m.spawnMul * waveMul))
+    // Hordas: onda 1 mantém o base (intro); da ONDA 2 em diante ~2x, crescendo a cada onda.
+    // Teto de 150/onda (balanceado por SIMULAÇÃO de progressão completa; >150 tornava as ondas
+    // longas demais e o total invencível). O nº de VIVOS simultâneos é limitado no spawner (80).
+    const waveMul = w === 1 ? 1 : 2 + 0.3 * (w - 2)
+    const count = Math.min(150, Math.round((5 + w * 3.2) * m.spawnMul * waveMul))
     this.toSpawn = []
     for (let i = 0; i < count; i++) {
       // proporção de inimigos perigosos cresce com a onda e o mapa
@@ -352,7 +356,8 @@ export class Engine {
     if (!this.run) throw new Error('no run')
     const m = MAPS[this.run.mapIdx]
     const cfg = ENEMY_CFG[type]
-    const hpMul = type === 'boss' ? m.hpMul * (1 + 0.1 * (this.run.wave - 1)) * (this.run.dmgMulE || 1) : this.run.hpMul
+    // Chefe: HP também escala com a DIFICULDADE da fase (diff 1→×1 … 7→×2.5) — o do finale é um duelo de verdade
+    const hpMul = type === 'boss' ? m.hpMul * (1 + 0.1 * (this.run.wave - 1)) * (this.run.dmgMulE || 1) * (1 + 0.25 * (m.diff - 1)) : this.run.hpMul
     const hp = Math.max(1, Math.round(cfg.hp * hpMul))
     // Surge logo FORA do círculo de alcance (não na borda da tela), com fade-in
     const ang = Math.random() * Math.PI * 2
@@ -376,16 +381,18 @@ export class Engine {
       let dx = hx, dy = hy
       if (dx === undefined || dy === undefined) { const ox = e.x - this.cx, oy = e.y - this.cy, om = Math.hypot(ox, oy) || 1; dx = ox / om; dy = oy / om }
       // Recompensa escala com a robustez do inimigo (e.coin: comum 1, tanque 2, chefe 15) × dificuldade da fase
-      const diffMul = 1 + 0.5 * (MAPS[this.run.mapIdx].diff - 1) // dif 1..7 → 1.0..4.0
-      // Da ONDA 2 em diante o abate vale MAIS, crescendo a cada onda (a recompensa acompanha o perigo).
-      const waveVal = 1 + 0.5 * (this.run.wave - 1) // onda1=1x, onda2=1.5x, onda3=2x, onda4=2.5x...
+      // Recompensa (CALIBRADA POR SIMULAÇÃO de progressão completa — hiperinflava e o jogador maxava
+      // tudo em 1 run): multiplicadores suaves + fator global 0.35; Coleta (b_luz) vale +15%/nível.
+      const diffMul = 1 + 0.25 * (MAPS[this.run.mapIdx].diff - 1) // dif 1..7 → 1.0..2.5 (recompensa)
+      const waveVal = Math.min(2.5, 1 + 0.25 * (this.run.wave - 1)) // onda vale mais, com teto
+      const econ = 0.35
       if (e.force) {
         // inimigo de força → dropa a moeda daquela força (sem b_luz, que é exclusivo da Luz)
-        const amt = Math.max(1, Math.round(e.coin * diffMul * waveVal))
+        const amt = Math.max(1, Math.round(e.coin * diffMul * waveVal * econ))
         if (!this.lab) this.forceCoins[e.force] += amt // lab: só mostra o valor, não credita
         this.fx.push({ type: 'coin', x: e.x, y: e.y, sx: e.x, sy: e.y, dx, dy, life: 1.15, max: 1.15, text: `+${amt} ◈`, color: PATHS[e.force].color })
       } else {
-        const amt = Math.max(1, Math.round(e.coin * diffMul * waveVal * (1 + this.lvl('b_luz'))))
+        const amt = Math.max(1, Math.round(e.coin * diffMul * waveVal * econ * (1 + 0.15 * this.lvl('b_luz'))))
         if (!this.lab) this.coins += amt // lab: só mostra o valor, não credita
         this.fx.push({ type: 'coin', x: e.x, y: e.y, sx: e.x, sy: e.y, dx, dy, life: 1.15, max: 1.15, text: `+${amt} ✦` })
       }
@@ -445,7 +452,8 @@ export class Engine {
     if ((this.screen !== 'game' && !this.lab) || !this.run) return
     const run = this.run; run.time += dt
 
-    if (this.toSpawn.length) { this.spawnTimer -= dt; if (this.spawnTimer <= 0) { const s = this.toSpawn.shift()!; this.enemies.push(this.makeEnemy(s.type, s.force)); this.spawnTimer = this.spawnInterval * (0.75 + Math.random() * 0.5) } }
+    // Teto de VIVOS simultâneos (80): a fila espera abrir vaga — mantém 60fps e evita paredão injusto
+    if (this.toSpawn.length) { this.spawnTimer -= dt; if (this.spawnTimer <= 0 && this.enemies.length < 80) { const s = this.toSpawn.shift()!; this.enemies.push(this.makeEnemy(s.type, s.force)); this.spawnTimer = this.spawnInterval * (0.75 + Math.random() * 0.5) } }
 
     // weapons
     if (this.luzActive()) this.wpBasic(dt)
@@ -535,7 +543,7 @@ export class Engine {
       this._waveResolved = true
       const m = MAPS[run.mapIdx]
       // Bônus por superar a onda: ~5 abates ao valor da fase atual (escala com a dificuldade)
-      const waveBonus = Math.round(5 * (1 + 0.5 * (m.diff - 1)) * (1 + this.lvl('b_luz')))
+      const waveBonus = Math.round(4 * (1 + 0.25 * (m.diff - 1)) * (1 + 0.15 * this.lvl('b_luz')))
       this.coins += waveBonus
       audio.play('coin')
       // Recompensa de onda anima junto ao total de moedas no topo
@@ -606,30 +614,33 @@ export class Engine {
       if (d < bd && d - e.r < s.range) { bd = d; best = e }
     }
     if (!best) return
-    const v = this.variant('base') // 0 único · 1 leque ×3 · 2 radial ×8 · 3 perfurante · 4 veloz ×2
-    this.run.tBasic = v === 4 ? s.interval * 0.4 : s.interval // cooldown só inicia quando realmente dispara
+    // Variações = SIDEGRADES (dano por tiro compensa o nº de tiros/cadência — nenhuma domina):
+    // 0 único (referência) · 1 leque ×3 (0.55 cada) · 2 radial ×8 (0.35 cada; forte cercado, fraco focado)
+    // · 3 perfurante (0.9, atravessa 4 com 60% nos seguintes) · 4 veloz (cadência ×0.55, dano 0.7)
+    const v = this.variant('base')
+    this.run.tBasic = v === 4 ? s.interval * 0.55 : s.interval // cooldown só inicia quando realmente dispara
     audio.play('shoot_basic')
     const base = Math.atan2(best.y - this.cy, best.x - this.cx)
     const spd = s.projSpeed, life = s.range / spd + 0.4
     // clarão de disparo (muzzle flash) na boca do núcleo
     this.fx.push({ type: 'spark', x: this.cx + Math.cos(base) * this.coreR, y: this.cy + Math.sin(base) * this.coreR, life: 0.16, max: 0.16, color: '#fff7e0' })
-    const shoot = (ang: number, pierce: number) => this.shots.push({ x: this.cx, y: this.cy, px: this.cx, py: this.cy, vx: Math.cos(ang) * spd, vy: Math.sin(ang) * spd, dmg: s.dmg, crit: s.crit, life, pierce, pierceMul: s.pierceMul, hits: 0, hit: [], target: best })
-    if (v === 1) { for (let i = 0; i < 3; i++) shoot(base + (i - 1) * 0.26, s.pierce) }        // Leque ×3
-    else if (v === 2) { for (let i = 0; i < 8; i++) shoot(i / 8 * Math.PI * 2, s.pierce) }      // Radial ×8 (em volta)
-    else if (v === 3) { shoot(base, 99) }                                                        // Perfurante (atravessa)
-    else { for (let i = 0; i < s.count; i++) shoot(base + (i - (s.count - 1) / 2) * 0.13, s.pierce) } // Único / Veloz
+    const shoot = (ang: number, pierce: number, dmul: number, pm?: number) => this.shots.push({ x: this.cx, y: this.cy, px: this.cx, py: this.cy, vx: Math.cos(ang) * spd, vy: Math.sin(ang) * spd, dmg: s.dmg * dmul, crit: s.crit, life, pierce, pierceMul: pm ?? s.pierceMul, hits: 0, hit: [], target: best })
+    if (v === 1) { for (let i = 0; i < 3; i++) shoot(base + (i - 1) * 0.26, s.pierce, 0.55) }
+    else if (v === 2) { for (let i = 0; i < 8; i++) shoot(i / 8 * Math.PI * 2, s.pierce, 0.35) }
+    else if (v === 3) { shoot(base, 4, 0.9, Math.max(0.6, s.pierceMul)) }
+    else { for (let i = 0; i < s.count; i++) shoot(base + (i - (s.count - 1) / 2) * 0.13, s.pierce, v === 4 ? 0.7 : 1) }
   }
   private wpStorm(dt: number) {
     if (!this.run) return
     this.run.tStorm -= dt; if (this.run.tStorm > 0) return
-    const s = this.stormStats(); this.run.tStorm = s.interval
     const v = this.variant('storm') // 0 cadeia · 1 raio focado · 2 tempestade · 3 salto longo · 4 para-raios
+    const s = this.stormStats(); this.run.tStorm = v === 2 ? s.interval * 1.6 : s.interval
     const pool = this.enemies.filter(e => !e.dead && Math.hypot(e.x - this.cx, e.y - this.cy) < s.range)
     if (!pool.length) return
     audio.play('shoot_storm')
-    if (v === 2) { // Tempestade: atinge TODOS no alcance de uma vez
+    if (v === 2) { // Tempestade: TOCA todos no alcance, mas com dano BAIXO (0.4) e cadência lenta — chuvisco, não deleta
       const o = { x: this.cx, y: this.cy }
-      for (const e of pool) { const crit = Math.random() < s.crit ? 2 : 1; this.damageEnemy(e, s.dmg * crit, 'storm'); this.fx.push({ type: 'bolt', pts: this.jagged([o, { x: e.x, y: e.y }]), life: 0.13, max: 0.13, color: '#6aa8ff' }) }
+      for (const e of pool) { const crit = Math.random() < s.crit ? 2 : 1; this.damageEnemy(e, s.dmg * 0.4 * crit, 'storm'); this.fx.push({ type: 'bolt', pts: this.jagged([o, { x: e.x, y: e.y }]), life: 0.13, max: 0.13, color: '#6aa8ff' }) }
       return
     }
     const chain = v === 1 ? 1 : (v === 3 ? s.chain + 2 : s.chain), jump = v === 3 ? 220 : 130, dmgMul = v === 1 ? 2.6 : 1
@@ -651,7 +662,7 @@ export class Engine {
     this.run.tVol -= dt; if (this.run.tVol > 0) return
     const s = this.volcanoStats()
     const v = this.variant('volcano') // 0 erupção · 1 meteoros ×3 · 2 anel de lava · 3 bomba · 4 lança-chamas
-    this.run.tVol = v === 3 ? s.interval * 1.6 : (v === 4 ? s.interval * 0.45 : s.interval)
+    this.run.tVol = v === 3 ? s.interval * 1.9 : (v === 4 ? s.interval * 0.45 : s.interval)
     // SÓ inimigos dentro do alcance (não explode/dana além do range — regra geral dos tiros)
     const pool = this.enemies.filter(e => !e.dead && Math.hypot(e.x - this.cx, e.y - this.cy) < s.range + e.r); if (!pool.length) return
     audio.play('shoot_volcano')
@@ -662,9 +673,9 @@ export class Engine {
     }
     const nearN = (n: number) => pool.slice().sort((a, b) => Math.hypot(a.x - this.cx, a.y - this.cy) - Math.hypot(b.x - this.cx, b.y - this.cy)).slice(0, n)
     if (v === 1) { for (const e of nearN(3)) blast(e.x, e.y, s.radius * 0.6, s.dmg * 0.7, false) }      // Meteoros ×3
-    else if (v === 2) { blast(this.cx, this.cy, s.radius * 1.5, s.dmg, true) }                            // Anel de lava (no núcleo)
-    else if (v === 3) { const t = nearN(1)[0]; blast(t.x, t.y, s.radius * 1.7, s.dmg * 2.2, true) }         // Bomba
-    else if (v === 4) { const t = nearN(1)[0]; blast(t.x, t.y, s.radius * 0.8, s.dmg, false) }              // Lança-chamas
+    else if (v === 2) { blast(this.cx, this.cy, s.radius * 1.5, s.dmg * 0.8, true) }                        // Anel de lava (no núcleo)
+    else if (v === 3) { const t = nearN(1)[0]; blast(t.x, t.y, s.radius * 1.7, s.dmg * 2.2, true) }         // Bomba (forte, porém bem mais lenta)
+    else if (v === 4) { const t = nearN(1)[0]; blast(t.x, t.y, s.radius * 0.8, s.dmg * 0.5, false) }        // Lança-chamas (rápido, dano baixo)
     else { const t = nearN(1)[0]; blast(t.x, t.y, s.radius, s.dmg, true) }                                  // Erupção
     this._shake = Math.max(this._shake, 0.12)
   }
@@ -675,7 +686,7 @@ export class Engine {
     const v = this.variant('frost') // 0 nova · 1 ampla · 2 congelante · 3 explosiva · 4 rápida
     this.run.tFrost = v === 4 ? s.novaInt * 0.5 : s.novaInt
     const novaR = v === 1 ? s.novaR * 1.6 : (v === 3 ? s.novaR * 0.7 : s.novaR)
-    const dmg = v === 1 ? s.novaDmg * 0.6 : (v === 2 ? s.novaDmg * 0.4 : (v === 3 ? s.novaDmg * 2.2 : s.novaDmg))
+    const dmg = v === 1 ? s.novaDmg * 0.6 : (v === 2 ? s.novaDmg * 0.4 : (v === 3 ? s.novaDmg * 2.2 : (v === 4 ? s.novaDmg * 0.6 : s.novaDmg)))
     const freeze = v === 2 ? s.freeze * 2.6 : s.freeze
     audio.play('shoot_frost')
     for (const e of this.enemies) { if (Math.hypot(e.x - this.cx, e.y - this.cy) < novaR + e.r) { this.damageEnemy(e, dmg, 'frost'); e.freeze = Math.max(e.freeze, freeze) } }
@@ -688,7 +699,7 @@ export class Engine {
     const v = this.variant('terra') // 0 tremor · 1 gravidade (puxa) · 2 abalo amplo · 3 impacto · 4 rápido
     this.run.tTerra = v === 4 ? s.interval * 0.5 : s.interval
     const waveR = v === 2 ? s.waveR * 1.6 : (v === 3 ? s.waveR * 0.7 : s.waveR)
-    const dmg = v === 3 ? s.dmg * 2.4 : s.dmg
+    const dmg = v === 3 ? s.dmg * 1.8 : (v === 4 ? s.dmg * 0.6 : s.dmg)
     const knock = v === 1 ? -s.knock : (v === 2 ? s.knock * 0.4 : (v === 3 ? s.knock * 1.6 : s.knock)) // Gravidade: knock negativo = puxa
     audio.play('shoot_terra')
     for (const e of this.enemies) { const dx = e.x - this.cx, dy = e.y - this.cy, d = Math.hypot(dx, dy) || 1; if (d < waveR + e.r) { this.damageEnemy(e, dmg, 'terra'); e.vx += (dx / d) * knock; e.vy += (dy / d) * knock } }
